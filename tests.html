@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Food Log tests</title>
+<style>
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 24px; }
+  li.pass { color: #006300; }
+  li.fail { color: #b00020; font-weight: 600; }
+  #summary { font-size: 18px; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Food Log tests</h1>
+<p>Runs against a throwaway database; your real log is not touched.</p>
+<p id="summary">Running…</p>
+<ul id="results"></ul>
+<script type="module">
+import * as db from "./db.js";
+import { buildWorkbook, excelDate, excelTime, XLSX_MIME } from "./xlsx.js";
+import { buildLogExport, exportPeriod } from "./export.js";
+
+const TEST_DB = "foodlog-test";
+const results = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function report(ok, name, detail = "") {
+  ok ? passed++ : failed++;
+  const li = document.createElement("li");
+  li.className = ok ? "pass" : "fail";
+  li.textContent = `${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`;
+  results.append(li);
+}
+
+function eq(actual, expected, name) {
+  const a = JSON.stringify(actual), e = JSON.stringify(expected);
+  report(a === e, name, a === e ? "" : `expected ${e}, got ${a}`);
+}
+
+async function rejects(fn, name) {
+  try { await fn(); report(false, name, "did not throw"); }
+  catch { report(true, name); }
+}
+
+const wipe = () => new Promise((resolve, reject) => {
+  const req = indexedDB.deleteDatabase(TEST_DB);
+  req.onsuccess = req.onblocked = () => resolve();
+  req.onerror = () => reject(req.error);
+});
+
+async function main() {
+  await wipe();
+  db.useDatabase(TEST_DB);
+
+  // ---- helpers
+  eq(db.parseAmount("150"), 150, "parseAmount reads a whole number");
+  eq(db.parseAmount("1,5"), 1.5, "parseAmount accepts a decimal comma");
+  eq(db.parseAmount(" 2.25 "), 2.25, "parseAmount accepts a decimal point");
+  eq(db.parseAmount(""), null, "parseAmount treats empty as no amount");
+  eq(Number.isNaN(db.parseAmount("abc")), true, "parseAmount rejects text");
+  eq(Number.isNaN(db.parseAmount("-3")), true, "parseAmount rejects a negative amount");
+  eq(db.dateStr(new Date(2026, 0, 5, 0, 30)), "2026-01-05", "dateStr uses the local calendar date");
+  eq(db.timeStr(new Date(2026, 0, 5, 7, 4)), "07:04", "timeStr pads to HH:MM");
+  eq(db.shiftDate("2026-03-01", -1), "2026-02-28", "shiftDate crosses a month boundary");
+  eq(db.shiftDate("2026-12-31", 1), "2027-01-01", "shiftDate crosses a year boundary");
+
+  // ---- entries
+  const oats = await db.saveEntry({ date: "2026-10-01", time: "08:10", meal: "breakfast", foodName: " Oats ", amount: 60, unit: "g", note: "with milk" });
+  const egg = await db.saveEntry({ date: "2026-10-01", time: "07:55", meal: "breakfast", foodName: "Egg", amount: 2, unit: "pcs" });
+  await db.saveEntry({ date: "2026-10-02", time: "12:30", meal: "lunch", foodName: "Soup", amount: null, unit: "bogus" });
+  await db.saveEntry({ date: "2026-10-04", time: "19:00", meal: "dinner", foodName: "Salmon", amount: 180, unit: "g" });
+
+  eq(oats.foodName, "Oats", "saveEntry trims the food name");
+  eq((await db.entriesForDate("2026-10-01")).map((e) => e.foodName), ["Egg", "Oats"], "entriesForDate returns that day's entries in time order");
+  eq((await db.entriesForDate("2026-10-03")).length, 0, "entriesForDate is empty for a day with nothing logged");
+  const soup = (await db.entriesForDate("2026-10-02"))[0];
+  eq([soup.amount, soup.unit], [null, "g"], "an entry may have no amount, and an unknown unit falls back to grams");
+  eq((await db.entriesBetween("2026-10-01", "2026-10-02")).length, 3, "entriesBetween includes both end dates");
+  eq((await db.entriesBetween("2026-10-02", "2026-10-04")).map((e) => e.foodName), ["Soup", "Salmon"], "entriesBetween is sorted by date");
+
+  await db.saveEntry({ ...egg, amount: 3, note: "boiled" });
+  const edited = await db.getEntry(egg.id);
+  eq([edited.amount, edited.note, edited.createdAt === egg.createdAt], [3, "boiled", true], "saving an entry with an id updates it in place");
+  eq((await db.allEntries()).length, 4, "editing does not create a second entry");
+
+  await db.deleteEntry(oats.id);
+  eq((await db.entriesForDate("2026-10-01")).map((e) => e.foodName), ["Egg"], "deleteEntry removes the entry");
+  await rejects(() => db.saveEntry({ meal: "lunch", foodName: "  " }), "saveEntry rejects an empty food name");
+  await rejects(() => db.saveEntry({ meal: "brunch", foodName: "Toast" }), "saveEntry rejects an unknown meal");
+
+  // ---- foods
+  const first = await db.rememberFood({ name: "Skyr", amount: 150, unit: "g" });
+  eq([first.portionAmount, first.portionUnit, first.useCount], [150, "g", 1], "rememberFood creates a food whose portion is the amount logged");
+  const again = await db.rememberFood({ name: "skyr", amount: 300, unit: "g" });
+  eq([again.id === first.id, again.portionAmount, again.useCount], [true, 150, 2], "rememberFood matches by name ignoring case and keeps the portion");
+  const scanned = await db.rememberFood({ name: "Knekkebrød", brand: "Wasa", barcode: "7300400481588", amount: 1, unit: "pcs" });
+  eq((await db.foodByBarcode("7300400481588")).id, scanned.id, "foodByBarcode finds a scanned food");
+  eq(await db.foodByBarcode("0000"), null, "foodByBarcode returns null for an unknown code");
+  eq(await db.foodByBarcode(""), null, "foodByBarcode ignores an empty code");
+  const renamed = await db.rememberFood({ name: "Crispbread", barcode: "7300400481588", amount: 2, unit: "pcs" });
+  eq([renamed.id === scanned.id, renamed.portionAmount], [true, 1], "rememberFood matches by barcode before name");
+  const typed = await db.rememberFood({ name: "Banana" });
+  const filled = await db.rememberFood({ name: "Banana", amount: 1, unit: "pcs" });
+  eq([filled.id === typed.id, filled.portionAmount, filled.portionUnit], [true, 1, "pcs"], "rememberFood fills in a missing portion later");
+
+  await db.saveFood({ ...first, favourite: true });
+  eq((await db.getFood(first.id)).favourite, true, "saveFood stores the favourite flag");
+  eq((await db.allFoods()).map((f) => f.name), ["Banana", "Knekkebrød", "Skyr"], "allFoods is sorted by name");
+  await db.deleteFood(typed.id);
+  eq((await db.allFoods()).length, 2, "deleteFood removes the food");
+
+  // ---- meals
+  const meal = await db.saveMeal({ name: "Usual breakfast", items: [
+    { foodId: first.id, foodName: "Skyr", amount: 150, unit: "g" },
+    { foodName: "Knekkebrød", amount: 2, unit: "pcs" },
+    { foodName: "  ", amount: 1, unit: "g" },
+  ] });
+  eq(meal.items.length, 2, "saveMeal drops items without a name");
+  eq((await db.getMeal(meal.id)).items[1], { foodId: null, foodName: "Knekkebrød", amount: 2, unit: "pcs" }, "a meal keeps each item's amount and unit");
+  await rejects(() => db.saveMeal({ name: "Empty", items: [] }), "saveMeal rejects a meal with no foods");
+  eq((await db.allMeals()).length, 1, "allMeals lists saved meals");
+
+  // ---- settings
+  eq(await db.getSetting("reminders", "fallback"), "fallback", "getSetting returns the fallback when nothing is stored");
+  await db.setSetting("reminders", { enabled: true, times: { lunch: "12:00" } });
+  eq((await db.getSetting("reminders")).times.lunch, "12:00", "setSetting stores a value");
+
+  // ---- backup
+  const backup = await db.exportData();
+  eq([backup.app, backup.entries.length, backup.foods.length, backup.meals.length], ["foodlog", 3, 2, 1], "exportData contains everything");
+  const roundTripped = JSON.parse(JSON.stringify(backup));
+
+  await wipe();
+  db.useDatabase(TEST_DB);
+  eq((await db.allEntries()).length, 0, "a fresh database is empty");
+  const counts = await db.importData(roundTripped);
+  eq(counts, { entries: 3, foods: 2, meals: 1 }, "importData reports what it restored");
+  eq((await db.entriesForDate("2026-10-04"))[0].foodName, "Salmon", "entries survive export and import");
+  eq((await db.foodByBarcode("7300400481588")).name, "Knekkebrød", "foods survive export and import, indexes included");
+  eq((await db.getSetting("reminders")).enabled, true, "settings survive export and import");
+
+  await db.saveEntry({ date: "2026-10-05", meal: "snack", foodName: "Apple" });
+  await db.importData(roundTripped);
+  eq((await db.allEntries()).length, 3, "importData replaces what was there");
+  await rejects(() => db.importData({ hello: "world" }), "importData rejects a file that is not a backup");
+  await rejects(() => db.importData({ ...roundTripped, format: 99 }), "importData rejects a backup from a newer version");
+
+  // ---- where the food came from
+  await wipe();
+  db.useDatabase(TEST_DB);
+  const today = db.dateStr();
+  const tagged = await db.saveEntry({ date: db.shiftDate(today, -2), time: "19:30", meal: "dinner", foodName: "Pizza", amount: 1, unit: "pcs", source: "  Luigi's  ", note: "said gluten-free", brand: "Luigi", barcode: "0012345678905" });
+  eq([tagged.source, tagged.brand, tagged.barcode], ["Luigi's", "Luigi", "0012345678905"], "an entry stores its source, brand and barcode");
+  await db.saveEntry({ date: db.shiftDate(today, -5), time: "12:00", meal: "lunch", foodName: "Soup", source: "Cafeteria" });
+  await db.saveEntry({ date: today, time: "08:00", meal: "breakfast", foodName: "Oats", amount: 60, unit: "g", source: "Home" });
+  await db.saveEntry({ date: today, time: "12:15", meal: "lunch", foodName: "Salad", amount: 250, unit: "g", source: "cafeteria" });
+  await db.saveEntry({ date: today, time: "15:00", meal: "snack", foodName: "Apple" });
+  eq(await db.recentSources(), ["cafeteria", "Home", "Luigi's"], "recentSources lists each place once, most recent first, ignoring case");
+  eq(await db.recentSources(1), ["cafeteria"], "recentSources respects its limit");
+  const untagged = (await db.entriesForDate(today)).find((e) => e.foodName === "Apple");
+  eq(untagged.source, "", "an entry without a source stores an empty one");
+
+  // ---- Excel export
+  eq(excelDate("2026-10-04"), 46299, "excelDate matches Excel's own number for a date");
+  eq(excelDate("1900-03-01"), 61, "excelDate matches Excel just after its 1900 leap-year quirk");
+  eq([excelTime("00:00"), excelTime("12:00"), excelTime("18:00")], [0, 0.5, 0.75], "excelTime is the fraction of a day");
+  const bytes = buildWorkbook([{ name: "S", columns: [{ header: "A" }], rows: [["x"]] }]);
+  eq([bytes[0], bytes[1], bytes[2], bytes[3]], [0x50, 0x4b, 0x03, 0x04], "buildWorkbook produces a zip file");
+  eq(exportPeriod(1), { from: today, to: today }, "a 1-day export covers today only");
+  eq(exportPeriod(3), { from: db.shiftDate(today, -2), to: today }, "a 3-day export covers today and the two days before");
+  const three = await buildLogExport(3);
+  eq([three.count, three.file.type === XLSX_MIME, three.file.name], [4, true, `food-log_${db.shiftDate(today, -2)}_to_${today}.xlsx`], "a 3-day export holds the entries from those days, in a named .xlsx file");
+  eq((await buildLogExport(6)).count, 5, "a longer export reaches further back");
+  eq((await buildLogExport(1)).count, 3, "a 1-day export holds only today's entries");
+
+  await wipe();
+}
+
+main()
+  .catch((err) => report(false, "tests crashed", String(err && err.stack || err)))
+  .finally(() => {
+    document.getElementById("summary").textContent =
+      failed === 0 ? `ALL PASSED (${passed} checks)` : `${failed} FAILED, ${passed} passed`;
+  });
+</script>
+</body>
+</html>

@@ -12,6 +12,7 @@ const MEAL_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", s
 const MEAL_COLOR = { breakfast: "--series-1", lunch: "--series-2", dinner: "--series-3", snack: "--series-4" };
 const REMINDED_MEALS = ["breakfast", "lunch", "dinner"];
 const DEFAULT_REMINDERS = { enabled: true, times: { breakfast: "08:00", lunch: "12:00", dinner: "18:00" } };
+const DEFAULT_PERIOD = { enabled: true };
 const RANGES = {
   7: { label: "7 days", days: 7, weekly: false },
   30: { label: "30 days", days: 30, weekly: false },
@@ -28,6 +29,7 @@ const toastEl = document.getElementById("toast");
 
 const state = {
   reminders: DEFAULT_REMINDERS,
+  period: DEFAULT_PERIOD,   // whether the Period checkbox is shown on the Today screen
   addContext: null,       // { meal, date } when Add was opened from a meal's + button
   savedSegment: "foods",
   range: 30,
@@ -85,6 +87,23 @@ function segmented(name, options, value, extraClass = "") {
   return `<div class="seg ${extraClass}" role="radiogroup">${options.map(([v, label]) =>
     `<label><input type="radio" name="${name}" value="${esc(v)}" ${v === value ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div>`;
 }
+
+// A time of day is chosen as hour and minute, 00:00 to 23:59. The phone's own time picker
+// is not used, because it shows AM and PM whenever the phone is set to a 12-hour clock.
+const two = (n) => String(n).padStart(2, "0");
+
+function timeField(name, value, disabled = false) {
+  const [hour, minute] = String(value).split(":");
+  const options = (count, chosen) => Array.from({ length: count }, (_, i) =>
+    `<option${two(i) === chosen ? " selected" : ""}>${two(i)}</option>`).join("");
+  const attrs = disabled ? "disabled" : "";
+  return `<span class="time-field" data-time="${name}">`
+    + `<select aria-label="Hour" ${attrs}>${options(24, hour)}</select><span aria-hidden="true">:</span>`
+    + `<select aria-label="Minute" ${attrs}>${options(60, minute)}</select></span>`;
+}
+
+const readTime = (root, name) =>
+  [...root.querySelectorAll(`[data-time="${name}"] select`)].map((s) => s.value).join(":");
 
 const unitOptions = UNITS.map((u) => [u, u === "g" ? "grams" : "pieces"]);
 const mealOptions = MEALS.map((m) => [m, MEAL_LABEL[m]]);
@@ -225,7 +244,7 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
       ${sourceField(init.source, sources)}
       <div class="field-pair">
         <label class="field"><span>Date</span><input name="date" type="date" value="${esc(init.date)}" max="${db.dateStr()}"></label>
-        <label class="field"><span>Time</span><input name="time" type="time" value="${esc(init.time)}"></label>
+        <div class="field"><span>Time</span>${timeField("time", init.time)}</div>
       </div>
       <label class="field"><span>Note</span>
         <textarea name="note" rows="2" placeholder="Optional">${esc(init.note)}</textarea>
@@ -266,11 +285,11 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
     const amount = db.parseAmount(fields.amount.value);
     if (!foodName) return showError(form, "Type what you ate.");
     if (Number.isNaN(amount)) return showError(form, "The amount must be a number above zero, or left empty.");
-    if (!fields.date.value || !fields.time.value) return showError(form, "Choose a date and a time.");
+    if (!fields.date.value) return showError(form, "Choose a date.");
 
     const values = {
       foodName, amount, unit: fields.unit.value, meal: fields.meal.value, source: fields.source.value,
-      date: fields.date.value, time: fields.time.value, note: fields.note.value,
+      date: fields.date.value, time: readTime(form, "time"), note: fields.note.value,
     };
     if (entry) {
       await db.saveEntry({ ...entry, ...values });
@@ -304,7 +323,7 @@ async function openLogMealSheet(meal, { slot = null, date = null } = {}) {
       ${sourceField("", sources)}
       <div class="field-pair">
         <label class="field"><span>Date</span><input name="date" type="date" value="${esc(date ?? db.dateStr())}" max="${db.dateStr()}"></label>
-        <label class="field"><span>Time</span><input name="time" type="time" value="${db.timeStr()}"></label>
+        <div class="field"><span>Time</span>${timeField("time", db.timeStr())}</div>
       </div>
       <p class="form-error" hidden></p>
     </form>`);
@@ -312,14 +331,14 @@ async function openLogMealSheet(meal, { slot = null, date = null } = {}) {
   wireSourceChips(form);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const { meal: slotField, date: dateField, time, source } = form.elements;
-    if (!dateField.value || !time.value) return showError(form, "Choose a date and a time.");
+    const { meal: slotField, date: dateField, source } = form.elements;
+    if (!dateField.value) return showError(form, "Choose a date.");
     for (const it of meal.items) {
       const food = await db.rememberFood({ name: it.foodName, amount: it.amount, unit: it.unit });
       await db.saveEntry({
         foodName: it.foodName, amount: it.amount, unit: it.unit, foodId: food.id,
         brand: food.brand, barcode: food.barcode, source: source.value,
-        meal: slotField.value, date: dateField.value, time: time.value,
+        meal: slotField.value, date: dateField.value, time: readTime(form, "time"),
       });
     }
     closeSheet();
@@ -488,7 +507,7 @@ async function openExportFlow() {
           `<button type="button" class="chip" data-days="${n}">${n}</button>`).join("")}</div>
       </div>
       <p class="hint period"></p>
-      <p class="hint">Makes an Excel file of every food logged in that period, newest first: date, time, meal, food, quantity, where it came from, your note and the barcode. Days with nothing logged are listed too.</p>
+      <p class="hint">Makes an Excel file of every food logged in that period, newest first: date, time, meal, food, quantity, where it came from, your note and the barcode, with each day's pain, period and exercise. Days with nothing logged are listed too.</p>
       <p class="form-error" hidden></p>
     </form>`);
   const form = sheet.querySelector("form");
@@ -520,7 +539,7 @@ async function openExportFlow() {
     const n = readDays();
     if (!n) return showError(form, `The number of days must be a whole number from 1 to ${MAX_EXPORT_DAYS}.`);
     const result = await buildLogExport(n);
-    if (!result.count) return showError(form, "Nothing is logged in that period, so there is no file to make.");
+    if (!result.count && !result.dayCount) return showError(form, "Nothing is logged in that period, so there is no file to make.");
     closeSheet();
     if (await deliverFile(result.file, "Food log")) toast(`Excel file made: ${result.count} ${result.count === 1 ? "food" : "foods"}`);
   });
@@ -546,10 +565,68 @@ function entryRow(e) {
     </button></li>`;
 }
 
+// A 0 to 10 slider. It starts unset ("–"); a tap sets it, 0 included, and a tap on the
+// number clears it again.
+function scaleControl(field, label, value) {
+  return `
+    <span class="scale">
+      <span class="scale-label">${label}</span>
+      <input type="range" min="0" max="10" step="1" value="${value ?? 0}" data-day="${field}" aria-label="${label}, from 0 to 10">
+      <button type="button" class="scale-value" data-clear="${field}" aria-label="Clear ${label.toLowerCase()}">${value ?? "–"}</button>
+    </span>`;
+}
+
+function dayCard(day) {
+  const hidden = day.exercise ? "" : "hidden";
+  return `
+    <section class="card day-card" aria-label="How the day went">
+      <div class="day-row">
+        ${state.period.enabled ? `<label class="check"><input type="checkbox" data-day="period" ${day.period ? "checked" : ""}><span>Period</span></label>` : ""}
+        ${scaleControl("pain", "Pain", day.pain)}
+      </div>
+      <input type="text" data-day="painNote" value="${esc(day.painNote)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="Pain note">
+      <div class="day-row">
+        <label class="check"><input type="checkbox" data-day="exercise" ${day.exercise ? "checked" : ""}><span>Exercise</span></label>
+        <span class="exercise-detail" ${hidden}>${scaleControl("intensity", "Intensity", day.intensity)}</span>
+      </div>
+      <input type="text" class="exercise-detail" data-day="exerciseNote" value="${esc(day.exerciseNote)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="Exercise note" ${hidden}>
+    </section>`;
+}
+
+// Every change on the day card is saved straight away; there is no Save button.
+function wireDayCard(card, day) {
+  const save = () => db.saveDay(day).catch(reportError);
+  const showScale = (name) => {
+    card.querySelector(`[data-day="${name}"]`).value = day[name] ?? 0;
+    card.querySelector(`[data-clear="${name}"]`).textContent = day[name] ?? "–";
+  };
+  const take = (el) => {
+    const name = el.dataset.day;
+    if (el.type === "checkbox") day[name] = el.checked;
+    else if (el.type === "range") day[name] = Number(el.value);
+    else day[name] = el.value;
+    if (el.type === "range") showScale(name);
+    if (name === "exercise") card.querySelectorAll(".exercise-detail").forEach((x) => { x.hidden = !day.exercise; });
+    save();
+  };
+  card.addEventListener("input", (e) => { if (e.target.dataset.day) take(e.target); });
+  card.addEventListener("change", (e) => { if (e.target.dataset.day) take(e.target); });
+  card.addEventListener("click", (e) => {
+    // a tap on a slider records its value even when the value did not move, so 0 can be set
+    if (e.target.type === "range") return take(e.target);
+    const clear = e.target.closest("[data-clear]");
+    if (!clear) return;
+    day[clear.dataset.clear] = null;
+    showScale(clear.dataset.clear);
+    save();
+  });
+}
+
 async function renderDay(date) {
   const today = db.dateStr();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? "") || date > today) date = today;
-  const [entries, dismissed] = await Promise.all([db.entriesForDate(date), db.getSetting("dismissed")]);
+  const [entries, dismissed, day] = await Promise.all([
+    db.entriesForDate(date), db.getSetting("dismissed"), db.getDay(date)]);
   const due = date === today ? dueMeals(entries, dismissed) : [];
 
   const nudge = due.length ? `
@@ -589,7 +666,8 @@ async function renderDay(date) {
         <button type="button" class="icon-btn" data-action="go-day" data-date="${db.shiftDate(date, 1)}" aria-label="Next day" ${date === today ? "disabled" : ""}>${ICON.chevronRight}</button>
       </div>
     </header>
-    ${nudge}${sections}`;
+    ${nudge}${dayCard(day)}${sections}`;
+  wireDayCard(view.querySelector(".day-card"), day);
 }
 
 // ---------------------------------------------------------------- Add
@@ -816,9 +894,15 @@ async function renderSettings() {
       <label class="switch-row"><span>Remind me in the app when a meal is not logged</span>
         <input type="checkbox" data-reminder="enabled" ${r.enabled ? "checked" : ""}></label>
       ${REMINDED_MEALS.map((m) => `
-        <label class="switch-row"><span>${MEAL_LABEL[m]} by</span>
-          <input type="time" data-reminder="${m}" value="${esc(r.times[m])}" ${r.enabled ? "" : "disabled"}></label>`).join("")}
+        <div class="switch-row"><span>${MEAL_LABEL[m]} by</span>${timeField(m, r.times[m], !r.enabled)}</div>`).join("")}
       <p class="hint">Shown on the Today screen when you open the app. The app cannot send notifications while it is closed.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Period</h2></div>
+      <label class="switch-row"><span>Show the Period checkbox on the Today screen</span>
+        <input type="checkbox" data-setting="period" ${state.period.enabled ? "checked" : ""}></label>
+      <p class="hint">When this is off, the checkbox is hidden and the Excel file has no Period column. Pain and exercise stay.</p>
     </section>
 
     <section class="card">
@@ -848,15 +932,21 @@ async function renderSettings() {
       </ul>
     </section>`;
 
-  view.querySelectorAll("[data-reminder]").forEach((input) => input.addEventListener("change", async () => {
-    const key = input.dataset.reminder;
-    const next = { enabled: r.enabled, times: { ...r.times } };
-    if (key === "enabled") next.enabled = input.checked;
-    else if (input.value) next.times[key] = input.value;
+  const saveReminders = async (next) => {
     state.reminders = next;
     await db.setSetting("reminders", next);
     renderSettings();
-  }));
+  };
+  view.querySelector('[data-reminder="enabled"]').addEventListener("change", (e) =>
+    saveReminders({ enabled: e.target.checked, times: r.times }));
+  for (const m of REMINDED_MEALS) {
+    view.querySelector(`[data-time="${m}"]`).addEventListener("change", () =>
+      saveReminders({ enabled: r.enabled, times: { ...r.times, [m]: readTime(view, m) } }));
+  }
+  view.querySelector('[data-setting="period"]').addEventListener("change", async (e) => {
+    state.period = { enabled: e.target.checked };
+    await db.setSetting("period", state.period);
+  });
   view.querySelector("#import-file").addEventListener("change", (e) => importBackup(e.target.files[0]));
 }
 
@@ -885,6 +975,7 @@ async function importBackup(file) {
   try {
     const counts = await db.importData(data);
     state.reminders = await db.getSetting("reminders", DEFAULT_REMINDERS);
+    state.period = await db.getSetting("period", DEFAULT_PERIOD);
     toast(`Restored ${counts.entries} entries and ${counts.foods} foods`);
   } catch (err) {
     toast(err.message);
@@ -1025,7 +1116,8 @@ window.addEventListener("hashchange", () => {
 
 // Coming back to the app later in the day: refresh, so the date and reminders are current.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && !sheetOpen()) render();
+  const typing = document.activeElement?.matches?.("input[type=text], input[type=search], textarea");
+  if (!document.hidden && !sheetOpen() && !typing) render();
 });
 
 let resizeTimer;
@@ -1038,6 +1130,7 @@ window.addEventListener("resize", () => {
 
 async function start() {
   state.reminders = await db.getSetting("reminders", DEFAULT_REMINDERS);
+  state.period = await db.getSetting("period", DEFAULT_PERIOD);
   await render();
   db.requestPersistence();
   // The service worker makes the app open offline. On localhost it is off unless ?sw is

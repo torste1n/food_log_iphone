@@ -4,13 +4,14 @@
 //             brand, barcode, foodId
 //   foods     saved foods: id, name, brand, barcode, portionAmount, portionUnit, favourite, lastUsed, useCount
 //   meals     saved meals: id, name, items [{ foodId, foodName, amount, unit }]
+//   days      one row per day: date, period, pain, painNote, exercise, intensity, exerciseNote
 //   settings  key/value pairs
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"];
 export const UNITS = ["g", "pcs"];
 
-const DB_VERSION = 1;
-const BACKUP_FORMAT = 1;
+const DB_VERSION = 2;       // 2 added the days store
+const BACKUP_FORMAT = 2;    // 2 added days to the backup file
 let dbName = "foodlog";
 let dbPromise = null;
 
@@ -24,12 +25,17 @@ function open() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open(dbName, DB_VERSION);
-      req.onupgradeneeded = () => {
+      // Runs on first use and when an older version of the app left an older database:
+      // only what is missing is added, so an existing log is kept.
+      req.onupgradeneeded = (event) => {
         const db = req.result;
-        db.createObjectStore("entries", { keyPath: "id" }).createIndex("date", "date");
-        db.createObjectStore("foods", { keyPath: "id" }).createIndex("barcode", "barcode");
-        db.createObjectStore("meals", { keyPath: "id" });
-        db.createObjectStore("settings", { keyPath: "key" });
+        if (event.oldVersion < 1) {
+          db.createObjectStore("entries", { keyPath: "id" }).createIndex("date", "date");
+          db.createObjectStore("foods", { keyPath: "id" }).createIndex("barcode", "barcode");
+          db.createObjectStore("meals", { keyPath: "id" });
+          db.createObjectStore("settings", { keyPath: "key" });
+        }
+        if (event.oldVersion < 2) db.createObjectStore("days", { keyPath: "date" });
       };
       req.onsuccess = () => {
         const db = req.result;
@@ -181,6 +187,23 @@ function buildMeal(meal) {
   return { id: validId(meal.id ?? newId(), "A meal"), name, items };
 }
 
+// A 0 to 10 scale that has not been set is null, which is different from a 0.
+const scale = (value) => (Number.isInteger(value) && value >= 0 && value <= 10 ? value : null);
+
+// How a day went: period, pain and exercise.
+function buildDay(day) {
+  if (typeof day.date !== "string" || !DATE_RE.test(day.date)) throw new Error("A day needs a date like 2026-10-04");
+  return {
+    date: day.date,
+    period: Boolean(day.period),
+    pain: scale(day.pain),
+    painNote: text(day.painNote, 2000),
+    exercise: Boolean(day.exercise),
+    intensity: scale(day.intensity),
+    exerciseNote: text(day.exerciseNote, 2000),
+  };
+}
+
 // Only the settings the app knows are kept from a backup; anything else is left out.
 function buildSetting(row) {
   const { key, value } = row ?? {};
@@ -199,6 +222,7 @@ function buildSetting(row) {
     }
     return { key, value: { date: value.date, meals: value.meals.filter((m) => MEALS.includes(m)) } };
   }
+  if (key === "period") return { key, value: { enabled: Boolean(value?.enabled) } };
   if (key === "lastExport" && Number.isFinite(value)) return { key, value };
   return null;
 }
@@ -307,6 +331,26 @@ export async function allMeals() {
   return rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 }
 
+// ---------------------------------------------------------------- days
+
+const isBlankDay = (d) =>
+  !d.period && d.pain === null && !d.painNote && !d.exercise && d.intensity === null && !d.exerciseNote;
+
+export async function getDay(date) {
+  return (await read("days", (s) => done(s.get(date)))) ?? buildDay({ date });
+}
+
+// A day with nothing recorded is not kept.
+export async function saveDay(day) {
+  const row = buildDay(day);
+  await write("days", (s) => done(isBlankDay(row) ? s.delete(row.date) : s.put(row)));
+  return row;
+}
+
+// Both ends inclusive.
+export const daysBetween = (from, to) =>
+  read("days", (s) => done(s.getAll(IDBKeyRange.bound(from, to))));
+
 // ---------------------------------------------------------------- settings
 
 export async function getSetting(key, fallback = null) {
@@ -318,7 +362,8 @@ export const setSetting = (key, value) => write("settings", (s) => done(s.put({ 
 
 // ---------------------------------------------------------------- backup
 
-const STORES = ["entries", "foods", "meals", "settings"];
+const STORES = ["entries", "foods", "meals", "settings", "days"];
+const STORES_V1 = ["entries", "foods", "meals", "settings"];     // a backup from before days existed
 
 export async function exportData() {
   const data = await run(STORES, "readonly", async (tx) => {
@@ -333,7 +378,8 @@ export async function exportData() {
 // untrusted: every row is checked and rebuilt first, and if anything in it is not what the
 // app itself would have written, nothing is restored.
 export async function importData(data) {
-  if (!data || data.app !== "foodlog" || !STORES.every((name) => Array.isArray(data[name]))) {
+  if (!data || data.app !== "foodlog" || !STORES_V1.every((name) => Array.isArray(data[name]))
+      || (data.days !== undefined && !Array.isArray(data.days))) {
     throw new Error("This file is not a Food Log backup");
   }
   if (data.format > BACKUP_FORMAT) {
@@ -351,6 +397,10 @@ export async function importData(data) {
       foods: rebuild(data.foods, buildFood, "A food"),
       meals: rebuild(data.meals, buildMeal, "A meal"),
       settings: data.settings.map(buildSetting).filter(Boolean),
+      days: (data.days ?? []).map((row) => {
+        if (!row || typeof row !== "object") throw new Error("A day is not a record");
+        return buildDay(row);
+      }),
     };
   } catch (err) {
     throw new Error(`This backup file is damaged and was not restored: ${err.message}`);

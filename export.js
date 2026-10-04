@@ -1,7 +1,7 @@
 // The Excel export: everything logged over the last N days, laid out for tracing where
 // gluten may have come from after a reaction.
 //
-//   Food log   one row per food eaten, newest first
+//   Food log   one row per food eaten, newest first, with that day's pain, period and exercise
 //   Days       one row per day in the period, including days with nothing logged
 //   Sources    one row per place the food came from
 
@@ -24,9 +24,32 @@ export function exportPeriod(days) {
 
 export async function buildLogExport(days) {
   const { from, to } = exportPeriod(days);
-  const entries = await db.entriesBetween(from, to);
+  const [entries, dayRecords, periodSetting] = await Promise.all([
+    db.entriesBetween(from, to), db.daysBetween(from, to), db.getSetting("period", { enabled: true }),
+  ]);
   const newestFirst = [...entries].sort((a, b) =>
     b.date.localeCompare(a.date) || b.time.localeCompare(a.time) || b.createdAt - a.createdAt);
+
+  // How each day went, repeated on every row of that day. The Period column is left out
+  // when period tracking is switched off in Settings.
+  const dayOf = new Map(dayRecords.map((d) => [d.date, d]));
+  const dayColumns = [
+    ...(periodSetting.enabled ? [{ header: "Period", width: 8 }] : []),
+    { header: "Pain", type: "number", width: 7 },
+    { header: "Pain note", width: 30 },
+    { header: "Exercise", width: 9 },
+    { header: "Intensity", type: "number", width: 10 },
+    { header: "Exercise note", width: 30 },
+  ];
+  const dayCells = (date) => {
+    const d = dayOf.get(date);
+    if (!d) return dayColumns.map(() => "");
+    return [
+      ...(periodSetting.enabled ? [d.period ? "Yes" : ""] : []),
+      d.pain, d.painNote,
+      d.exercise ? "Yes" : "", d.exercise ? d.intensity : null, d.exercise ? d.exerciseNote : "",
+    ];
+  };
 
   const log = {
     name: "Food log",
@@ -42,10 +65,12 @@ export async function buildLogExport(days) {
       { header: "Source", width: 24 },
       { header: "Note", width: 36 },
       { header: "Barcode", width: 16 },
+      ...dayColumns,
     ],
     rows: newestFirst.map((e) => [
       e.date, weekday(e.date), e.time, MEAL_LABEL[e.meal], e.foodName, e.brand,
       e.amount, e.amount ? (e.unit === "pcs" ? "pieces" : "grams") : "", e.source, e.note, e.barcode,
+      ...dayCells(e.date),
     ]),
   };
 
@@ -54,7 +79,8 @@ export async function buildLogExport(days) {
     const list = entries.filter((e) => e.date === date);
     const meals = ["breakfast", "lunch", "dinner", "snack"].filter((m) => list.some((e) => e.meal === m));
     const sources = [...new Set(list.map((e) => e.source).filter(Boolean))];
-    dayRows.push([date, weekday(date), list.length, meals.map((m) => MEAL_LABEL[m]).join(", "), sources.join(", ")]);
+    dayRows.push([date, weekday(date), list.length, meals.map((m) => MEAL_LABEL[m]).join(", "), sources.join(", "),
+      ...dayCells(date)]);
   }
   const daysSheet = {
     name: "Days",
@@ -64,6 +90,7 @@ export async function buildLogExport(days) {
       { header: "Foods logged", type: "number", width: 13 },
       { header: "Meals logged", width: 34 },
       { header: "Sources", width: 44 },
+      ...dayColumns,
     ],
     rows: dayRows,
   };
@@ -96,6 +123,6 @@ export async function buildLogExport(days) {
   const bytes = buildWorkbook([log, daysSheet, sourcesSheet]);
   return {
     file: new File([bytes], `food-log_${from}_to_${to}.xlsx`, { type: XLSX_MIME }),
-    count: entries.length, from, to,
+    count: entries.length, dayCount: dayRecords.length, from, to,
   };
 }

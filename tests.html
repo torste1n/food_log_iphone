@@ -201,6 +201,65 @@ async function main() {
   eq((await buildLogExport(6)).count, 5, "a longer export reaches further back");
   eq((await buildLogExport(1)).count, 3, "a 1-day export holds only today's entries");
 
+  // ---- how the day went: period, pain, exercise
+  await wipe();
+  db.useDatabase(TEST_DB);
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: false, pain: null, painNote: "", exercise: false, intensity: null, exerciseNote: "" }, "a day with nothing recorded reads as blank");
+  await db.saveDay({ date: "2026-10-04", period: true, pain: 6, painNote: " cramps after lunch ", exercise: true, intensity: 3, exerciseNote: "walk" });
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: true, pain: 6, painNote: "cramps after lunch", exercise: true, intensity: 3, exerciseNote: "walk" }, "saveDay stores period, pain, exercise and both notes");
+  await db.saveDay({ date: "2026-10-03", pain: 0 });
+  eq((await db.getDay("2026-10-03")).pain, 0, "a pain of 0 is stored as 0, not as unset");
+  const odd = await db.saveDay({ date: "2026-10-02", pain: 11, intensity: 3.5, period: "yes", exercise: 1 });
+  eq([odd.pain, odd.intensity, odd.period, odd.exercise], [null, null, true, true], "values off the 0 to 10 scale are dropped; ticks become true or false");
+  eq((await db.daysBetween("2026-10-03", "2026-10-04")).map((d) => d.date), ["2026-10-03", "2026-10-04"], "daysBetween includes both end dates");
+  await db.saveDay({ date: "2026-10-03", pain: null });
+  eq((await db.daysBetween("2026-10-01", "2026-10-31")).map((d) => d.date), ["2026-10-02", "2026-10-04"], "a day cleared back to blank is not kept");
+  await rejects(() => db.saveDay({ date: "today", pain: 3 }), "saveDay rejects a date that is not a date");
+
+  // ---- backups carry the days; older backups without them still restore
+  await db.saveEntry({ date: "2026-10-04", time: "12:00", meal: "lunch", foodName: "Soup" });
+  await db.setSetting("period", { enabled: false });
+  const v2 = JSON.parse(JSON.stringify(await db.exportData()));
+  eq([v2.format, v2.days.length], [2, 2], "a backup holds the days");
+  await wipe();
+  db.useDatabase(TEST_DB);
+  await db.importData(v2);
+  eq([(await db.getDay("2026-10-04")).pain, (await db.getSetting("period")).enabled], [6, false], "days and the Period setting survive export and import");
+  const { days: _dropped, ...v1 } = { ...v2, format: 1 };
+  await db.saveDay({ date: "2026-10-05", pain: 9 });
+  await db.importData(v1);
+  eq([(await db.allEntries()).length, (await db.daysBetween("2026-01-01", "2026-12-31")).length], [1, 0], "a backup from before days existed restores, with no days");
+  await rejects(() => db.importData({ ...v2, days: [{ date: '"><img src=x onerror=1>', pain: 3 }] }), "a backup day whose date is not a date is refused");
+  await rejects(() => db.importData({ ...v2, days: "x" }), "a backup whose days are not a list is refused");
+  const cleaned = await db.importData({ ...v2, days: [{ date: "2026-10-04", pain: "<b>", painNote: 7, extra: "<script>" }] }).then(() => db.getDay("2026-10-04"));
+  eq([cleaned.pain, cleaned.painNote, "extra" in cleaned], [null, "7", false], "a restored day keeps only known fields, cleaned");
+  const exported = await buildLogExport(3650);
+  eq([exported.count, exported.dayCount], [1, 1], "the export counts foods and recorded days");
+
+  // ---- a log made by the previous version of the app is kept when the database is upgraded
+  const OLD_DB = TEST_DB + "-upgrade";
+  const drop = (name) => new Promise((resolve) => { const r = indexedDB.deleteDatabase(name); r.onsuccess = r.onerror = r.onblocked = () => resolve(); });
+  await drop(OLD_DB);
+  await new Promise((resolve, reject) => {
+    const req = indexedDB.open(OLD_DB, 1);
+    req.onupgradeneeded = () => {
+      const old = req.result;
+      old.createObjectStore("entries", { keyPath: "id" }).createIndex("date", "date");
+      old.createObjectStore("foods", { keyPath: "id" }).createIndex("barcode", "barcode");
+      old.createObjectStore("meals", { keyPath: "id" });
+      old.createObjectStore("settings", { keyPath: "key" });
+      req.transaction.objectStore("entries").put({ id: "old1", createdAt: 1, date: "2026-09-01", time: "08:00", meal: "breakfast", foodName: "Old oats", amount: 60, unit: "g", source: "Home", note: "", brand: "", barcode: "", foodId: null });
+    };
+    req.onsuccess = () => { req.result.close(); resolve(); };
+    req.onerror = () => reject(req.error);
+  });
+  db.useDatabase(OLD_DB);
+  eq((await db.entriesForDate("2026-09-01")).map((e) => e.foodName), ["Old oats"], "a log from the previous version is still there after the upgrade");
+  await db.saveDay({ date: "2026-09-01", pain: 4 });
+  eq((await db.getDay("2026-09-01")).pain, 4, "the upgraded database can store days");
+  await drop(OLD_DB);
+  db.useDatabase(TEST_DB);
+
   await wipe();
 }
 

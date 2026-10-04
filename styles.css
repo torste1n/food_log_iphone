@@ -183,6 +183,34 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .switch-row input[type="checkbox"]:checked::after { transform: translateX(20px); }
 .card .switch-row + .hint { padding-top: 4px; }
 
+/* ------------------------------------------------------------ how the day went */
+
+.day-card { padding: 4px 0 8px; }
+.day-row { display: flex; align-items: center; gap: 16px; padding: 0 16px; min-height: 64px; }
+.day-card > input[type="text"] { display: block; width: calc(100% - 32px); margin: 2px 16px 10px; }
+.day-card > input[hidden], .exercise-detail[hidden] { display: none; }
+.exercise-detail { flex: 1; min-width: 0; display: flex; }
+
+.check { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; flex: none; font-weight: 500; }
+.check input {
+  -webkit-appearance: none; appearance: none; flex: none;
+  width: 26px; height: 26px; margin: 0; display: grid; place-items: center;
+  border: 2px solid var(--muted); border-radius: 7px; background: transparent;
+}
+.check input:checked { background: var(--ink); border-color: var(--ink); }
+.check input:checked::after {
+  content: ""; width: 6px; height: 12px; margin-top: -3px;
+  border: solid var(--on-ink); border-width: 0 3px 3px 0; transform: rotate(45deg);
+}
+
+.scale { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: center; }
+.scale-label { grid-column: 1 / -1; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.scale input[type="range"] { width: 100%; height: 36px; margin: 0; accent-color: var(--ink); background: transparent; }
+.scale-value {
+  min-width: 38px; height: 36px; padding: 0 6px; border: 0; border-radius: 10px;
+  background: var(--fill); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------ reminder card */
 
 .nudge-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px; color: var(--ink-2); }
@@ -256,6 +284,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .chip { min-height: 36px; padding: 0 14px; background: var(--fill); border: 0; border-radius: 18px; font-size: 15px; font-weight: 500; }
 .chip:active { opacity: 0.6; }
 .sheet-form > .hint.period { margin-top: 14px; color: var(--ink); font-weight: 500; }
+
+/* a time of day: hour and minute, 00:00 to 23:59 */
+.time-field { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; flex: none; }
+.time-field select { width: 68px; padding: 9px 4px; text-align: center; text-align-last: center; }
+.time-field select:disabled { opacity: 0.4; }
+.sheet-form .time-field { display: flex; }
+.sheet-form .time-field select { flex: 1; width: auto; }
 
 .portion-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .portion-row[hidden] { display: none; }

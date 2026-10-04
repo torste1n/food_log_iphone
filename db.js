@@ -4,14 +4,19 @@
 //             brand, barcode, foodId
 //   foods     saved foods: id, name, brand, barcode, portionAmount, portionUnit, favourite, lastUsed, useCount
 //   meals     saved meals: id, name, items [{ foodId, foodName, amount, unit }]
-//   days      one row per day: date, period, pain, painNote, exercise, intensity, exerciseNote
+//   days      one row per day: date, period, pain, painNote, exercise, intensity, exerciseNote,
+//             condition, conditionNote
 //   settings  key/value pairs
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"];
 export const UNITS = ["g", "pcs"];
 
+// The boxes of the Today screen, in their default order. Each can be switched off and moved
+// under Settings.
+export const BOX_IDS = ["food", "exercise", "period", "condition"];
+
 const DB_VERSION = 2;       // 2 added the days store
-const BACKUP_FORMAT = 2;    // 2 added days to the backup file
+const BACKUP_FORMAT = 3;    // 2 added days to the backup file; 3 added general condition and the boxes
 let dbName = "foodlog";
 let dbPromise = null;
 
@@ -190,7 +195,7 @@ function buildMeal(meal) {
 // A 0 to 10 scale that has not been set is null, which is different from a 0.
 const scale = (value) => (Number.isInteger(value) && value >= 0 && value <= 10 ? value : null);
 
-// How a day went: period, pain and exercise.
+// How a day went: exercise, period with pain, and general condition.
 function buildDay(day) {
   if (typeof day.date !== "string" || !DATE_RE.test(day.date)) throw new Error("A day needs a date like 2026-10-04");
   return {
@@ -201,6 +206,8 @@ function buildDay(day) {
     exercise: Boolean(day.exercise),
     intensity: scale(day.intensity),
     exerciseNote: text(day.exerciseNote, 2000),
+    condition: scale(day.condition),              // 0 is bad, 10 is good
+    conditionNote: text(day.conditionNote, 2000),
   };
 }
 
@@ -222,7 +229,8 @@ function buildSetting(row) {
     }
     return { key, value: { date: value.date, meals: value.meals.filter((m) => MEALS.includes(m)) } };
   }
-  if (key === "period") return { key, value: { enabled: Boolean(value?.enabled) } };
+  if (key === "boxes") return { key, value: normaliseBoxes(value) };
+  if (key === "period") return { key, value: { enabled: Boolean(value?.enabled) } };   // older backups
   if (key === "lastExport" && Number.isFinite(value)) return { key, value };
   return null;
 }
@@ -334,7 +342,8 @@ export async function allMeals() {
 // ---------------------------------------------------------------- days
 
 const isBlankDay = (d) =>
-  !d.period && d.pain === null && !d.painNote && !d.exercise && d.intensity === null && !d.exerciseNote;
+  !d.period && d.pain === null && !d.painNote && !d.exercise && d.intensity === null && !d.exerciseNote
+  && d.condition === null && !d.conditionNote;
 
 export async function getDay(date) {
   return (await read("days", (s) => done(s.get(date)))) ?? buildDay({ date });
@@ -359,6 +368,30 @@ export async function getSetting(key, fallback = null) {
 }
 
 export const setSetting = (key, value) => write("settings", (s) => done(s.put({ key, value })));
+
+// Any list becomes one that names every box exactly once: unknown or repeated entries are
+// dropped, and boxes it does not mention are added at the end, switched on.
+export function normaliseBoxes(list) {
+  const boxes = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    if (BOX_IDS.includes(item?.id) && !boxes.some((b) => b.id === item.id)) {
+      boxes.push({ id: item.id, enabled: Boolean(item.enabled) });
+    }
+  }
+  for (const id of BOX_IDS) {
+    if (!boxes.some((b) => b.id === id)) boxes.push({ id, enabled: true });
+  }
+  return boxes;
+}
+
+// The Today screen's boxes, in the order and with the switches chosen under Settings.
+export async function getBoxes() {
+  const stored = await getSetting("boxes");
+  if (stored) return normaliseBoxes(stored);
+  // Before the boxes could be arranged there was a single switch, for Period.
+  const period = await getSetting("period");
+  return BOX_IDS.map((id) => ({ id, enabled: !(id === "period" && period?.enabled === false) }));
+}
 
 // ---------------------------------------------------------------- backup
 

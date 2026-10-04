@@ -12,7 +12,7 @@ const MEAL_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", s
 const MEAL_COLOR = { breakfast: "--series-1", lunch: "--series-2", dinner: "--series-3", snack: "--series-4" };
 const REMINDED_MEALS = ["breakfast", "lunch", "dinner"];
 const DEFAULT_REMINDERS = { enabled: true, times: { breakfast: "08:00", lunch: "12:00", dinner: "18:00" } };
-const DEFAULT_PERIOD = { enabled: true };
+const BOX_LABEL = { food: "Food", exercise: "Exercise", period: "Period", condition: "General condition" };
 const RANGES = {
   7: { label: "7 days", days: 7, weekly: false },
   30: { label: "30 days", days: 30, weekly: false },
@@ -29,7 +29,7 @@ const toastEl = document.getElementById("toast");
 
 const state = {
   reminders: DEFAULT_REMINDERS,
-  period: DEFAULT_PERIOD,   // whether the Period checkbox is shown on the Today screen
+  boxes: [],                // the Today screen's boxes: [{ id, enabled }] in the chosen order
   addContext: null,       // { meal, date } when Add was opened from a meal's + button
   savedSegment: "foods",
   range: 30,
@@ -112,6 +112,8 @@ const ICON = {
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
   chevronRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
+  chevronUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg>',
+  chevronDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg>',
   star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.9z"/></svg>',
   export: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M8 8l4-4 4 4M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -507,7 +509,7 @@ async function openExportFlow() {
           `<button type="button" class="chip" data-days="${n}">${n}</button>`).join("")}</div>
       </div>
       <p class="hint period"></p>
-      <p class="hint">Makes an Excel file of every food logged in that period, newest first: date, time, meal, food, quantity, where it came from, your note and the barcode, with each day's pain, period and exercise. Days with nothing logged are listed too.</p>
+      <p class="hint">Makes an Excel file of every food logged in that period, newest first: date, time, meal, food, quantity, where it came from, your note and the barcode, with how each day went. Days with nothing logged are listed too.</p>
       <p class="form-error" hidden></p>
     </form>`);
   const form = sheet.querySelector("form");
@@ -567,33 +569,49 @@ function entryRow(e) {
 
 // A 0 to 10 slider. It starts unset ("–"); a tap sets it, 0 included, and a tap on the
 // number clears it again.
-function scaleControl(field, label, value) {
+// `ends` names the two ends of the scale where that is not obvious.
+function scaleControl(field, label, value, ends = null) {
   return `
     <span class="scale">
       <span class="scale-label">${label}</span>
       <input type="range" min="0" max="10" step="1" value="${value ?? 0}" data-day="${field}" aria-label="${label}, from 0 to 10">
       <button type="button" class="scale-value" data-clear="${field}" aria-label="Clear ${label.toLowerCase()}">${value ?? "–"}</button>
+      ${ends ? `<span class="scale-ends"><span>${ends[0]}</span><span>${ends[1]}</span></span>` : ""}
     </span>`;
 }
 
-function dayCard(day) {
-  const hidden = day.exercise ? "" : "hidden";
-  return `
-    <section class="card day-card" aria-label="How the day went">
-      <div class="day-row">
-        ${state.period.enabled ? `<label class="check"><input type="checkbox" data-day="period" ${day.period ? "checked" : ""}><span>Period</span></label>` : ""}
-        ${scaleControl("pain", "Pain", day.pain)}
-      </div>
-      <input type="text" data-day="painNote" value="${esc(day.painNote)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="Pain note">
+const noteInput = (field, value, label, extra = "") =>
+  `<input type="text" data-day="${field}" value="${esc(value)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="${label}" ${extra}>`;
+
+// The boxes of the Today screen other than Food, one per day.
+const DAY_BOX = {
+  exercise: (day) => {
+    const hidden = day.exercise ? "" : "hidden";
+    return `
+    <section class="card day-card" data-box="exercise">
       <div class="day-row">
         <label class="check"><input type="checkbox" data-day="exercise" ${day.exercise ? "checked" : ""}><span>Exercise</span></label>
         <span class="exercise-detail" ${hidden}>${scaleControl("intensity", "Intensity", day.intensity)}</span>
       </div>
-      <input type="text" class="exercise-detail" data-day="exerciseNote" value="${esc(day.exerciseNote)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="Exercise note" ${hidden}>
+      ${noteInput("exerciseNote", day.exerciseNote, "Exercise note", `class="exercise-detail" ${hidden}`)}
     </section>`;
-}
+  },
+  period: (day) => `
+    <section class="card day-card" data-box="period">
+      <div class="day-row">
+        <label class="check"><input type="checkbox" data-day="period" ${day.period ? "checked" : ""}><span>Period</span></label>
+        ${scaleControl("pain", "Pain", day.pain)}
+      </div>
+      ${noteInput("painNote", day.painNote, "Pain note")}
+    </section>`,
+  condition: (day) => `
+    <section class="card day-card" data-box="condition">
+      <div class="day-row">${scaleControl("condition", "General condition", day.condition, ["Bad", "Good"])}</div>
+      ${noteInput("conditionNote", day.conditionNote, "General condition note")}
+    </section>`,
+};
 
-// Every change on the day card is saved straight away; there is no Save button.
+// Every change in a day box is saved straight away; there is no Save button.
 function wireDayCard(card, day) {
   const save = () => db.saveDay(day).catch(reportError);
   const showScale = (name) => {
@@ -654,6 +672,12 @@ async function renderDay(date) {
       </section>`;
   }).join("");
 
+  // the boxes that are switched on, in the order chosen under Settings
+  const shown = state.boxes.filter((box) => box.enabled);
+  const foodOn = shown.some((box) => box.id === "food");
+  const boxes = shown.map((box) =>
+    (box.id === "food" ? `<div data-box="food">${sections}</div>` : DAY_BOX[box.id](day))).join("");
+
   view.innerHTML = `
     <header class="screen-head">
       <div class="head-row">
@@ -666,8 +690,8 @@ async function renderDay(date) {
         <button type="button" class="icon-btn" data-action="go-day" data-date="${db.shiftDate(date, 1)}" aria-label="Next day" ${date === today ? "disabled" : ""}>${ICON.chevronRight}</button>
       </div>
     </header>
-    ${nudge}${dayCard(day)}${sections}`;
-  wireDayCard(view.querySelector(".day-card"), day);
+    ${foodOn ? nudge : ""}${boxes || '<p class="empty-screen">Every box is switched off. Turn them on under Settings.</p>'}`;
+  view.querySelectorAll(".day-card").forEach((card) => wireDayCard(card, day));
 }
 
 // ---------------------------------------------------------------- Add
@@ -899,10 +923,17 @@ async function renderSettings() {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>Period</h2></div>
-      <label class="switch-row"><span>Show the Period checkbox on the Today screen</span>
-        <input type="checkbox" data-setting="period" ${state.period.enabled ? "checked" : ""}></label>
-      <p class="hint">When this is off, the checkbox is hidden and the Excel file has no Period column. Pain and exercise stay.</p>
+      <div class="card-head"><h2>Today screen</h2></div>
+      ${state.boxes.map((box, i) => `
+        <div class="switch-row box-row" data-box-row="${box.id}">
+          <span>${BOX_LABEL[box.id]}</span>
+          <span class="order-buttons">
+            <button type="button" class="icon-btn" data-box="${box.id}" data-move="-1" aria-label="Move ${BOX_LABEL[box.id]} up" ${i === 0 ? "disabled" : ""}>${ICON.chevronUp}</button>
+            <button type="button" class="icon-btn" data-box="${box.id}" data-move="1" aria-label="Move ${BOX_LABEL[box.id]} down" ${i === state.boxes.length - 1 ? "disabled" : ""}>${ICON.chevronDown}</button>
+          </span>
+          <input type="checkbox" data-box-toggle="${box.id}" aria-label="Show ${BOX_LABEL[box.id]}" ${box.enabled ? "checked" : ""}>
+        </div>`).join("")}
+      <p class="hint">Choose which boxes the Today screen shows, and in which order. A box that is off is also left out of the Excel file.</p>
     </section>
 
     <section class="card">
@@ -943,10 +974,21 @@ async function renderSettings() {
     view.querySelector(`[data-time="${m}"]`).addEventListener("change", () =>
       saveReminders({ enabled: r.enabled, times: { ...r.times, [m]: readTime(view, m) } }));
   }
-  view.querySelector('[data-setting="period"]').addEventListener("change", async (e) => {
-    state.period = { enabled: e.target.checked };
-    await db.setSetting("period", state.period);
-  });
+  const saveBoxes = async (next) => {
+    state.boxes = next;
+    await db.setSetting("boxes", next);
+    renderSettings();
+  };
+  view.querySelectorAll("[data-box-toggle]").forEach((input) => input.addEventListener("change", () =>
+    saveBoxes(state.boxes.map((box) => (box.id === input.dataset.boxToggle ? { ...box, enabled: input.checked } : box)))));
+  view.querySelectorAll("[data-move]").forEach((button) => button.addEventListener("click", () => {
+    const from = state.boxes.findIndex((box) => box.id === button.dataset.box);
+    const to = from + Number(button.dataset.move);
+    if (to < 0 || to >= state.boxes.length) return;
+    const next = [...state.boxes];
+    [next[from], next[to]] = [next[to], next[from]];
+    saveBoxes(next);
+  }));
   view.querySelector("#import-file").addEventListener("change", (e) => importBackup(e.target.files[0]));
 }
 
@@ -975,7 +1017,7 @@ async function importBackup(file) {
   try {
     const counts = await db.importData(data);
     state.reminders = await db.getSetting("reminders", DEFAULT_REMINDERS);
-    state.period = await db.getSetting("period", DEFAULT_PERIOD);
+    state.boxes = await db.getBoxes();
     toast(`Restored ${counts.entries} entries and ${counts.foods} foods`);
   } catch (err) {
     toast(err.message);
@@ -1130,7 +1172,7 @@ window.addEventListener("resize", () => {
 
 async function start() {
   state.reminders = await db.getSetting("reminders", DEFAULT_REMINDERS);
-  state.period = await db.getSetting("period", DEFAULT_PERIOD);
+  state.boxes = await db.getBoxes();
   await render();
   db.requestPersistence();
   // The service worker makes the app open offline. On localhost it is off unless ?sw is

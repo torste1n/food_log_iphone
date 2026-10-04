@@ -182,6 +182,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .switch-row input[type="checkbox"]:checked { background: var(--series-3); }
 .switch-row input[type="checkbox"]:checked::after { transform: translateX(20px); }
 .card .switch-row + .hint { padding-top: 4px; }
+.box-row { gap: 6px; padding-right: 12px; }
+.box-row > span:first-child { flex: 1; }
+.order-buttons { display: flex; flex: none; margin-right: 6px; }
 
 /* ------------------------------------------------------------ how the day went */
 
@@ -206,6 +209,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .scale { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: center; }
 .scale-label { grid-column: 1 / -1; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .scale input[type="range"] { width: 100%; height: 36px; margin: 0; accent-color: var(--ink); background: transparent; }
+.scale-ends { grid-column: 1; display: flex; justify-content: space-between; margin-top: -6px; font-size: 12px; color: var(--muted); }
+.day-card[data-box="condition"] .day-row { min-height: 76px; }
 .scale-value {
   min-width: 38px; height: 36px; padding: 0 6px; border: 0; border-radius: 10px;
   background: var(--fill); font-weight: 600; font-variant-numeric: tabular-nums;

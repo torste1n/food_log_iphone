@@ -201,12 +201,15 @@ async function main() {
   eq((await buildLogExport(6)).count, 5, "a longer export reaches further back");
   eq((await buildLogExport(1)).count, 3, "a 1-day export holds only today's entries");
 
-  // ---- how the day went: period, pain, exercise
+  // ---- how the day went: exercise, period with pain, general condition
   await wipe();
   db.useDatabase(TEST_DB);
-  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: false, pain: null, painNote: "", exercise: false, intensity: null, exerciseNote: "" }, "a day with nothing recorded reads as blank");
-  await db.saveDay({ date: "2026-10-04", period: true, pain: 6, painNote: " cramps after lunch ", exercise: true, intensity: 3, exerciseNote: "walk" });
-  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: true, pain: 6, painNote: "cramps after lunch", exercise: true, intensity: 3, exerciseNote: "walk" }, "saveDay stores period, pain, exercise and both notes");
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: false, pain: null, painNote: "", exercise: false, intensity: null, exerciseNote: "", condition: null, conditionNote: "" }, "a day with nothing recorded reads as blank");
+  await db.saveDay({ date: "2026-10-04", period: true, pain: 6, painNote: " cramps after lunch ", exercise: true, intensity: 3, exerciseNote: "walk", condition: 8, conditionNote: " good day " });
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: true, pain: 6, painNote: "cramps after lunch", exercise: true, intensity: 3, exerciseNote: "walk", condition: 8, conditionNote: "good day" }, "saveDay stores period, pain, exercise, general condition and the notes");
+  await db.saveDay({ date: "2026-10-06", condition: 0 });
+  eq((await db.getDay("2026-10-06")).condition, 0, "a general condition of 0 is stored, and keeps the day");
+  await db.saveDay({ date: "2026-10-06", condition: null });
   await db.saveDay({ date: "2026-10-03", pain: 0 });
   eq((await db.getDay("2026-10-03")).pain, 0, "a pain of 0 is stored as 0, not as unset");
   const odd = await db.saveDay({ date: "2026-10-02", pain: 11, intensity: 3.5, period: "yes", exercise: 1 });
@@ -220,7 +223,7 @@ async function main() {
   await db.saveEntry({ date: "2026-10-04", time: "12:00", meal: "lunch", foodName: "Soup" });
   await db.setSetting("period", { enabled: false });
   const v2 = JSON.parse(JSON.stringify(await db.exportData()));
-  eq([v2.format, v2.days.length], [2, 2], "a backup holds the days");
+  eq([v2.format, v2.days.length], [3, 2], "a backup holds the days");
   await wipe();
   db.useDatabase(TEST_DB);
   await db.importData(v2);
@@ -235,6 +238,26 @@ async function main() {
   eq([cleaned.pain, cleaned.painNote, "extra" in cleaned], [null, "7", false], "a restored day keeps only known fields, cleaned");
   const exported = await buildLogExport(3650);
   eq([exported.count, exported.dayCount], [1, 1], "the export counts foods and recorded days");
+
+  // ---- the boxes of the Today screen: which are shown, and in which order
+  await wipe();
+  db.useDatabase(TEST_DB);
+  const ids = (boxes) => boxes.map((b) => (b.enabled ? b.id : `(${b.id})`));
+  eq(ids(await db.getBoxes()), ["food", "exercise", "period", "condition"], "by default the boxes are Food, Exercise, Period, General condition, all shown");
+  await db.setSetting("period", { enabled: false });
+  eq(ids(await db.getBoxes()), ["food", "exercise", "(period)", "condition"], "an older Period switch that was off carries over");
+  await db.setSetting("boxes", [{ id: "condition", enabled: true }, { id: "food", enabled: false }, { id: "exercise", enabled: true }, { id: "period", enabled: true }]);
+  eq(ids(await db.getBoxes()), ["condition", "(food)", "exercise", "period"], "a chosen order and chosen switches are kept, and replace the older switch");
+  eq(ids(db.normaliseBoxes([{ id: "period", enabled: false }, { id: "nonsense", enabled: true }, { id: "period", enabled: true }, "x", null])),
+    ["(period)", "food", "exercise", "condition"], "a damaged list is repaired: unknown and repeated boxes dropped, missing ones added");
+  const boxBackup = JSON.parse(JSON.stringify(await db.exportData()));
+  await wipe();
+  db.useDatabase(TEST_DB);
+  await db.importData({ ...boxBackup, settings: [...boxBackup.settings.filter((s) => s.key !== "boxes"), { key: "boxes", value: [{ id: "food", enabled: false }, { id: '"><img src=x>', enabled: true }] }] });
+  eq(ids(await db.getBoxes()), ["(food)", "exercise", "period", "condition"], "boxes restored from a backup are checked and repaired");
+  await db.saveDay({ date: db.dateStr(), condition: 7, conditionNote: "fine", pain: 2, exercise: true, intensity: 5 });
+  await db.setSetting("boxes", [{ id: "condition", enabled: true }, { id: "food", enabled: true }, { id: "period", enabled: false }, { id: "exercise", enabled: true }]);
+  eq((await buildLogExport(1)).dayCount, 1, "the export still builds with boxes reordered and switched off");
 
   // ---- a log made by the previous version of the app is kept when the database is upgraded
   const OLD_DB = TEST_DB + "-upgrade";

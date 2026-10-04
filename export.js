@@ -1,7 +1,7 @@
 // The Excel export: everything logged over the last N days, laid out for tracing where
 // gluten may have come from after a reaction.
 //
-//   Food log   one row per food eaten, newest first, with that day's pain, period and exercise
+//   Food log   one row per food eaten, newest first, with how that day went
 //   Days       one row per day in the period, including days with nothing logged
 //   Sources    one row per place the food came from
 
@@ -24,31 +24,35 @@ export function exportPeriod(days) {
 
 export async function buildLogExport(days) {
   const { from, to } = exportPeriod(days);
-  const [entries, dayRecords, periodSetting] = await Promise.all([
-    db.entriesBetween(from, to), db.daysBetween(from, to), db.getSetting("period", { enabled: true }),
+  const [entries, dayRecords, boxes] = await Promise.all([
+    db.entriesBetween(from, to), db.daysBetween(from, to), db.getBoxes(),
   ]);
   const newestFirst = [...entries].sort((a, b) =>
     b.date.localeCompare(a.date) || b.time.localeCompare(a.time) || b.createdAt - a.createdAt);
 
-  // How each day went, repeated on every row of that day. The Period column is left out
-  // when period tracking is switched off in Settings.
+  // How each day went, repeated on every row of that day: one group of columns per box of
+  // the Today screen, in the order chosen under Settings. A box that is switched off there
+  // is left out here.
+  const GROUPS = {
+    exercise: {
+      columns: [{ header: "Exercise", width: 9 }, { header: "Intensity", type: "number", width: 10 }, { header: "Exercise note", width: 30 }],
+      cells: (d) => [d.exercise ? "Yes" : "", d.exercise ? d.intensity : null, d.exercise ? d.exerciseNote : ""],
+    },
+    period: {
+      columns: [{ header: "Period", width: 8 }, { header: "Pain", type: "number", width: 7 }, { header: "Pain note", width: 30 }],
+      cells: (d) => [d.period ? "Yes" : "", d.pain, d.painNote],
+    },
+    condition: {
+      columns: [{ header: "General condition", type: "number", width: 18 }, { header: "General condition note", width: 30 }],
+      cells: (d) => [d.condition, d.conditionNote],
+    },
+  };
+  const groups = boxes.filter((b) => b.enabled && GROUPS[b.id]).map((b) => GROUPS[b.id]);
   const dayOf = new Map(dayRecords.map((d) => [d.date, d]));
-  const dayColumns = [
-    ...(periodSetting.enabled ? [{ header: "Period", width: 8 }] : []),
-    { header: "Pain", type: "number", width: 7 },
-    { header: "Pain note", width: 30 },
-    { header: "Exercise", width: 9 },
-    { header: "Intensity", type: "number", width: 10 },
-    { header: "Exercise note", width: 30 },
-  ];
+  const dayColumns = groups.flatMap((g) => g.columns);
   const dayCells = (date) => {
     const d = dayOf.get(date);
-    if (!d) return dayColumns.map(() => "");
-    return [
-      ...(periodSetting.enabled ? [d.period ? "Yes" : ""] : []),
-      d.pain, d.painNote,
-      d.exercise ? "Yes" : "", d.exercise ? d.intensity : null, d.exercise ? d.exerciseNote : "",
-    ];
+    return d ? groups.flatMap((g) => g.cells(d)) : dayColumns.map(() => "");
   };
 
   const log = {

@@ -224,14 +224,14 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
       <div class="field"><span>Meal</span>${segmented("meal", mealOptions, init.meal, "seg-4")}</div>
       ${sourceField(init.source, sources)}
       <div class="field-pair">
-        <label class="field"><span>Date</span><input name="date" type="date" value="${init.date}" max="${db.dateStr()}"></label>
-        <label class="field"><span>Time</span><input name="time" type="time" value="${init.time}"></label>
+        <label class="field"><span>Date</span><input name="date" type="date" value="${esc(init.date)}" max="${db.dateStr()}"></label>
+        <label class="field"><span>Time</span><input name="time" type="time" value="${esc(init.time)}"></label>
       </div>
       <label class="field"><span>Note</span>
         <textarea name="note" rows="2" placeholder="Optional">${esc(init.note)}</textarea>
       </label>
       <p class="form-error" hidden></p>
-      ${entry ? `<button type="button" class="btn danger" data-action="delete-entry" data-id="${entry.id}">Delete entry</button>` : ""}
+      ${entry ? `<button type="button" class="btn danger" data-action="delete-entry" data-id="${esc(entry.id)}">Delete entry</button>` : ""}
     </form>`);
 
   const form = sheet.querySelector("form");
@@ -303,7 +303,7 @@ async function openLogMealSheet(meal, { slot = null, date = null } = {}) {
       <div class="field"><span>Meal</span>${segmented("meal", mealOptions, slot ?? guessMeal(), "seg-4")}</div>
       ${sourceField("", sources)}
       <div class="field-pair">
-        <label class="field"><span>Date</span><input name="date" type="date" value="${date ?? db.dateStr()}" max="${db.dateStr()}"></label>
+        <label class="field"><span>Date</span><input name="date" type="date" value="${esc(date ?? db.dateStr())}" max="${db.dateStr()}"></label>
         <label class="field"><span>Time</span><input name="time" type="time" value="${db.timeStr()}"></label>
       </div>
       <p class="form-error" hidden></p>
@@ -355,7 +355,7 @@ async function openMealSheet(meal = null, prefill = []) {
       </div>
       <datalist id="food-names">${foods.map((f) => `<option value="${esc(f.name)}">`).join("")}</datalist>
       <p class="form-error" hidden></p>
-      ${meal ? `<button type="button" class="btn danger" data-action="delete-meal" data-id="${meal.id}">Delete meal</button>` : ""}
+      ${meal ? `<button type="button" class="btn danger" data-action="delete-meal" data-id="${esc(meal.id)}">Delete meal</button>` : ""}
     </form>`);
   const form = sheet.querySelector("form");
   const list = form.querySelector(".items");
@@ -426,7 +426,7 @@ function openFoodSheet(food = null) {
       </label>
       <label class="switch-row"><span>Favourite</span><input name="favourite" type="checkbox" ${food?.favourite ? "checked" : ""}></label>
       <p class="form-error" hidden></p>
-      ${food ? `<button type="button" class="btn danger" data-action="delete-food" data-id="${food.id}">Delete food</button>` : ""}
+      ${food ? `<button type="button" class="btn danger" data-action="delete-food" data-id="${esc(food.id)}">Delete food</button>` : ""}
     </form>`);
   const form = sheet.querySelector("form");
   if (!food) form.elements.name.focus();
@@ -540,7 +540,7 @@ function dueMeals(entries, dismissed) {
 function entryRow(e) {
   const sub = [e.time, e.source, e.note].filter(Boolean).map(esc).join(" · ");
   return `
-    <li><button type="button" class="row" data-action="edit-entry" data-id="${e.id}">
+    <li><button type="button" class="row" data-action="edit-entry" data-id="${esc(e.id)}">
       <span class="row-main"><span class="row-title">${esc(e.foodName)}</span><span class="row-sub">${sub}</span></span>
       <span class="row-value">${esc(fmtAmount(e.amount, e.unit))}</span>
     </button></li>`;
@@ -558,7 +558,7 @@ async function renderDay(date) {
       ${due.map((m) => `
         <div class="nudge-row">
           <span>${MEAL_LABEL[m]}</span>
-          <button type="button" class="pill" data-action="add-to" data-meal="${m}" data-date="${date}">Log</button>
+          <button type="button" class="pill" data-action="add-to" data-meal="${m}" data-date="${esc(date)}">Log</button>
           <button type="button" class="icon-btn" data-action="dismiss-nudge" data-meal="${m}" aria-label="Dismiss ${MEAL_LABEL[m].toLowerCase()} reminder">${ICON.close}</button>
         </div>`).join("")}
     </section>` : "";
@@ -570,10 +570,10 @@ async function renderDay(date) {
         <div class="card-head">
           <i class="dot" style="background: var(${MEAL_COLOR[m]})"></i>
           <h2>${MEAL_LABEL[m]}</h2>
-          <button type="button" class="icon-btn" data-action="add-to" data-meal="${m}" data-date="${date}" aria-label="Add to ${MEAL_LABEL[m].toLowerCase()}">${ICON.plus}</button>
+          <button type="button" class="icon-btn" data-action="add-to" data-meal="${m}" data-date="${esc(date)}" aria-label="Add to ${MEAL_LABEL[m].toLowerCase()}">${ICON.plus}</button>
         </div>
         ${rows.length ? `<ul class="rows">${rows.map(entryRow).join("")}</ul>` : '<p class="empty">Nothing logged</p>'}
-        ${rows.length >= 2 ? `<button type="button" class="link card-foot" data-action="save-as-meal" data-meal="${m}" data-date="${date}">Save these as a meal</button>` : ""}
+        ${rows.length >= 2 ? `<button type="button" class="link card-foot" data-action="save-as-meal" data-meal="${m}" data-date="${esc(date)}">Save these as a meal</button>` : ""}
       </section>`;
   }).join("");
 
@@ -597,14 +597,14 @@ async function renderDay(date) {
 function foodRow(f) {
   const sub = [f.brand, fmtAmount(f.portionAmount, f.portionUnit)].filter(Boolean).map(esc).join(" · ");
   return `
-    <li><button type="button" class="row" data-action="pick-food" data-id="${f.id}">
+    <li><button type="button" class="row" data-action="pick-food" data-id="${esc(f.id)}">
       <span class="row-main"><span class="row-title">${esc(f.name)}</span><span class="row-sub">${sub}</span></span>
     </button></li>`;
 }
 
 function mealRow(m, action) {
   return `
-    <li><button type="button" class="row" data-action="${action}" data-id="${m.id}">
+    <li><button type="button" class="row" data-action="${action}" data-id="${esc(m.id)}">
       <span class="row-main"><span class="row-title">${esc(m.name)}</span>
       <span class="row-sub">${esc(m.items.map((it) => it.foodName).join(", "))}</span></span>
     </button></li>`;
@@ -665,8 +665,8 @@ async function renderSaved() {
     const sorted = [...items].sort((a, b) => Number(b.favourite) - Number(a.favourite));
     body = sorted.length ? `<section class="card"><ul class="rows">${sorted.map((f) => `
       <li class="row-with-action">
-        <button type="button" class="icon-btn star ${f.favourite ? "on" : ""}" data-action="toggle-favourite" data-id="${f.id}" aria-pressed="${f.favourite}" aria-label="Favourite ${esc(f.name)}">${ICON.star}</button>
-        <button type="button" class="row" data-action="edit-food" data-id="${f.id}">
+        <button type="button" class="icon-btn star ${f.favourite ? "on" : ""}" data-action="toggle-favourite" data-id="${esc(f.id)}" aria-pressed="${Boolean(f.favourite)}" aria-label="Favourite ${esc(f.name)}">${ICON.star}</button>
+        <button type="button" class="row" data-action="edit-food" data-id="${esc(f.id)}">
           <span class="row-main"><span class="row-title">${esc(f.name)}</span>
           <span class="row-sub">${[f.brand, fmtAmount(f.portionAmount, f.portionUnit)].filter(Boolean).map(esc).join(" · ")}</span></span>
         </button>
@@ -750,7 +750,7 @@ async function renderHistory() {
   const dayRows = [...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, list]) => {
     const meals = new Set(list.map((e) => e.meal));
     return `
-      <li><button type="button" class="row" data-action="go-day" data-date="${date}">
+      <li><button type="button" class="row" data-action="go-day" data-date="${esc(date)}">
         <span class="row-main"><span class="row-title">${esc(fmtDay(date, { weekday: "short", day: "numeric", month: "short" }))}</span>
         <span class="row-sub">${list.length} ${list.length === 1 ? "entry" : "entries"}</span></span>
         <span class="dots">${MEALS.map((m) => `<i class="dot ${meals.has(m) ? "" : "off"}" style="--c: var(${MEAL_COLOR[m]})" title="${MEAL_LABEL[m]}"></i>`).join("")}</span>
@@ -817,7 +817,7 @@ async function renderSettings() {
         <input type="checkbox" data-reminder="enabled" ${r.enabled ? "checked" : ""}></label>
       ${REMINDED_MEALS.map((m) => `
         <label class="switch-row"><span>${MEAL_LABEL[m]} by</span>
-          <input type="time" data-reminder="${m}" value="${r.times[m]}" ${r.enabled ? "" : "disabled"}></label>`).join("")}
+          <input type="time" data-reminder="${m}" value="${esc(r.times[m])}" ${r.enabled ? "" : "disabled"}></label>`).join("")}
       <p class="hint">Shown on the Today screen when you open the app. The app cannot send notifications while it is closed.</p>
     </section>
 

@@ -123,7 +123,7 @@ async function main() {
 
   // ---- settings
   eq(await db.getSetting("reminders", "fallback"), "fallback", "getSetting returns the fallback when nothing is stored");
-  await db.setSetting("reminders", { enabled: true, times: { lunch: "12:00" } });
+  await db.setSetting("reminders", { enabled: true, times: { breakfast: "08:00", lunch: "12:00", dinner: "18:00" } });
   eq((await db.getSetting("reminders")).times.lunch, "12:00", "setSetting stores a value");
 
   // ---- backup
@@ -145,6 +145,33 @@ async function main() {
   eq((await db.allEntries()).length, 3, "importData replaces what was there");
   await rejects(() => db.importData({ hello: "world" }), "importData rejects a file that is not a backup");
   await rejects(() => db.importData({ ...roundTripped, format: 99 }), "importData rejects a backup from a newer version");
+
+  // ---- a backup file is untrusted: anything the app would not have written is refused
+  const good = roundTripped.entries[0];
+  const tampered = (change) => ({ ...roundTripped, ...change });
+  const MARKUP = '"><img src=x onerror="alert(1)">';
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, id: MARKUP }] })), "a backup entry whose id holds markup is refused");
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, id: undefined }] })), "a backup entry without an id is refused");
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, date: MARKUP }] })), "a backup entry whose date is not a date is refused");
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, time: "25:99" }] })), "a backup entry with an impossible time is refused");
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, meal: "brunch" }] })), "a backup entry with an unknown meal is refused");
+  await rejects(() => db.importData(tampered({ entries: [{ ...good, foodId: MARKUP }] })), "a backup entry pointing at an invalid food id is refused");
+  await rejects(() => db.importData(tampered({ entries: ["not a record"] })), "a backup row that is not a record is refused");
+  await rejects(() => db.importData(tampered({ foods: [{ ...roundTripped.foods[0], id: MARKUP }] })), "a backup food whose id holds markup is refused");
+  await rejects(() => db.importData(tampered({ meals: [{ ...roundTripped.meals[0], items: "x" }] })), "a backup meal whose foods are not a list is refused");
+  await rejects(() => db.importData(tampered({ settings: [{ key: "reminders", value: { enabled: true, times: { breakfast: MARKUP, lunch: "12:00", dinner: "18:00" } } }] })), "backup reminder times that are not times are refused");
+  eq((await db.allEntries()).length, 3, "a refused backup leaves the existing log untouched");
+
+  const padded = await db.importData(tampered({
+    entries: [{ ...good, extra: "<script>", amount: "<b>", unit: "<i>", note: "x".repeat(5000), source: 42 }],
+    settings: [...roundTripped.settings, { key: "somethingElse", value: "<script>" }],
+  }));
+  const kept = (await db.allEntries())[0];
+  eq([padded.entries, "extra" in kept, kept.amount, kept.unit, kept.note.length, kept.source],
+    [1, false, null, "g", 2000, "42"], "a restored row keeps only known fields, with values cleaned and text cut to length");
+  eq(await db.getSetting("somethingElse", "absent"), "absent", "settings the app does not know are left out of a restore");
+  await rejects(() => db.saveEntry({ meal: "lunch", foodName: "Toast", date: "yesterday" }), "saveEntry rejects a date that is not a date");
+  await rejects(() => db.saveEntry({ meal: "lunch", foodName: "Toast", id: MARKUP }), "saveEntry rejects an id that is not an id");
 
   // ---- where the food came from
   await wipe();

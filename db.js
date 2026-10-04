@@ -105,27 +105,108 @@ function cleanAmount(amount) {
 
 const cleanUnit = (unit) => (UNITS.includes(unit) ? unit : "g");
 
+// ---------------------------------------------------------------- row builders
+
+// Every stored row is rebuilt field by field by these, whether it comes from the app's own
+// forms or from a backup file. Nothing that is not listed here is ever stored, ids, dates
+// and times must have exactly the expected shape, and text is cut to a sane length.
+const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const text = (value, max) => String(value ?? "").trim().slice(0, max);
+const wholeNumber = (value) => (Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0);
+
+function validId(id, what) {
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new Error(`${what} has an invalid id`);
+  return id;
+}
+
+const optionalId = (id, what) => (id === null || id === undefined ? null : validId(id, what));
+
+function buildEntry(entry) {
+  const foodName = text(entry.foodName, 200);
+  if (!foodName) throw new Error("An entry needs a food name");
+  if (!MEALS.includes(entry.meal)) throw new Error(`Unknown meal: ${text(entry.meal, 40)}`);
+  const date = entry.date ?? dateStr();
+  const time = entry.time ?? timeStr();
+  if (typeof date !== "string" || !DATE_RE.test(date)) throw new Error("An entry needs a date like 2026-10-04");
+  if (typeof time !== "string" || !TIME_RE.test(time)) throw new Error("An entry needs a time like 12:30");
+  return {
+    id: validId(entry.id ?? newId(), "An entry"),
+    createdAt: Number.isFinite(entry.createdAt) ? entry.createdAt : Date.now(),
+    date,
+    time,
+    meal: entry.meal,
+    foodName,
+    amount: cleanAmount(entry.amount),
+    unit: cleanUnit(entry.unit),
+    source: text(entry.source, 200),      // where the food came from: home, a restaurant…
+    note: text(entry.note, 2000),
+    brand: text(entry.brand, 200),
+    barcode: text(entry.barcode, 64),
+    foodId: optionalId(entry.foodId, "An entry's food"),
+  };
+}
+
+function buildFood(food) {
+  const name = text(food.name, 200);
+  if (!name) throw new Error("A food needs a name");
+  return {
+    id: validId(food.id ?? newId(), "A food"),
+    name,
+    brand: text(food.brand, 200),
+    barcode: text(food.barcode, 64),
+    portionAmount: cleanAmount(food.portionAmount),
+    portionUnit: cleanUnit(food.portionUnit),
+    favourite: Boolean(food.favourite),
+    lastUsed: wholeNumber(food.lastUsed),
+    useCount: wholeNumber(food.useCount),
+  };
+}
+
+function buildMeal(meal) {
+  const name = text(meal.name, 200);
+  if (!name) throw new Error("A meal needs a name");
+  if (meal.items !== undefined && !Array.isArray(meal.items)) throw new Error("A meal's foods must be a list");
+  const items = (meal.items ?? [])
+    .filter((it) => text(it?.foodName, 200))
+    .map((it) => ({
+      foodId: optionalId(it.foodId, "A meal's food"),
+      foodName: text(it.foodName, 200),
+      amount: cleanAmount(it.amount),
+      unit: cleanUnit(it.unit),
+    }));
+  if (!items.length) throw new Error("A meal needs at least one food");
+  return { id: validId(meal.id ?? newId(), "A meal"), name, items };
+}
+
+// Only the settings the app knows are kept from a backup; anything else is left out.
+function buildSetting(row) {
+  const { key, value } = row ?? {};
+  if (key === "reminders") {
+    const times = {};
+    for (const meal of ["breakfast", "lunch", "dinner"]) {
+      const time = value?.times?.[meal];
+      if (typeof time !== "string" || !TIME_RE.test(time)) throw new Error("The reminder times are invalid");
+      times[meal] = time;
+    }
+    return { key, value: { enabled: Boolean(value.enabled), times } };
+  }
+  if (key === "dismissed") {
+    if (typeof value?.date !== "string" || !DATE_RE.test(value.date) || !Array.isArray(value.meals)) {
+      throw new Error("The dismissed reminders are invalid");
+    }
+    return { key, value: { date: value.date, meals: value.meals.filter((m) => MEALS.includes(m)) } };
+  }
+  if (key === "lastExport" && Number.isFinite(value)) return { key, value };
+  return null;
+}
+
 // ---------------------------------------------------------------- entries
 
 export async function saveEntry(entry) {
-  const name = String(entry.foodName ?? "").trim();
-  if (!name) throw new Error("An entry needs a food name");
-  if (!MEALS.includes(entry.meal)) throw new Error(`Unknown meal: ${entry.meal}`);
-  const row = {
-    id: entry.id ?? newId(),
-    createdAt: entry.createdAt ?? Date.now(),
-    date: entry.date ?? dateStr(),
-    time: entry.time ?? timeStr(),
-    meal: entry.meal,
-    foodName: name,
-    amount: cleanAmount(entry.amount),
-    unit: cleanUnit(entry.unit),
-    source: String(entry.source ?? "").trim(),     // where the food came from: home, a restaurant…
-    note: String(entry.note ?? "").trim(),
-    brand: String(entry.brand ?? "").trim(),
-    barcode: String(entry.barcode ?? "").trim(),
-    foodId: entry.foodId ?? null,
-  };
+  const row = buildEntry(entry);
   await write("entries", (s) => done(s.put(row)));
   return row;
 }
@@ -164,19 +245,7 @@ export async function recentSources(limit = 6) {
 // ---------------------------------------------------------------- foods
 
 export async function saveFood(food) {
-  const name = String(food.name ?? "").trim();
-  if (!name) throw new Error("A food needs a name");
-  const row = {
-    id: food.id ?? newId(),
-    name,
-    brand: String(food.brand ?? "").trim(),
-    barcode: String(food.barcode ?? "").trim(),
-    portionAmount: cleanAmount(food.portionAmount),
-    portionUnit: cleanUnit(food.portionUnit),
-    favourite: Boolean(food.favourite),
-    lastUsed: food.lastUsed ?? 0,
-    useCount: food.useCount ?? 0,
-  };
+  const row = buildFood(food);
   await write("foods", (s) => done(s.put(row)));
   return row;
 }
@@ -225,18 +294,7 @@ export async function rememberFood({ name, brand = "", barcode = "", amount = nu
 // ---------------------------------------------------------------- meals
 
 export async function saveMeal(meal) {
-  const name = String(meal.name ?? "").trim();
-  if (!name) throw new Error("A meal needs a name");
-  const items = (meal.items ?? [])
-    .filter((it) => String(it.foodName ?? "").trim())
-    .map((it) => ({
-      foodId: it.foodId ?? null,
-      foodName: String(it.foodName).trim(),
-      amount: cleanAmount(it.amount),
-      unit: cleanUnit(it.unit),
-    }));
-  if (!items.length) throw new Error("A meal needs at least one food");
-  const row = { id: meal.id ?? newId(), name, items };
+  const row = buildMeal(meal);
   await write("meals", (s) => done(s.put(row)));
   return row;
 }
@@ -271,7 +329,9 @@ export async function exportData() {
   return { app: "foodlog", format: BACKUP_FORMAT, exportedAt: new Date().toISOString(), ...data };
 }
 
-// Replaces everything on the phone with the contents of a backup.
+// Replaces everything on the phone with the contents of a backup. The file is treated as
+// untrusted: every row is checked and rebuilt first, and if anything in it is not what the
+// app itself would have written, nothing is restored.
 export async function importData(data) {
   if (!data || data.app !== "foodlog" || !STORES.every((name) => Array.isArray(data[name]))) {
     throw new Error("This file is not a Food Log backup");
@@ -279,14 +339,30 @@ export async function importData(data) {
   if (data.format > BACKUP_FORMAT) {
     throw new Error("This backup was made by a newer version of the app");
   }
+  const rebuild = (rows, build, what) => rows.map((row) => {
+    if (!row || typeof row !== "object") throw new Error(`${what} is not a record`);
+    validId(row.id, what);          // a backup row must carry its own id; none is made up for it
+    return build(row);
+  });
+  let clean;
+  try {
+    clean = {
+      entries: rebuild(data.entries, buildEntry, "An entry"),
+      foods: rebuild(data.foods, buildFood, "A food"),
+      meals: rebuild(data.meals, buildMeal, "A meal"),
+      settings: data.settings.map(buildSetting).filter(Boolean),
+    };
+  } catch (err) {
+    throw new Error(`This backup file is damaged and was not restored: ${err.message}`);
+  }
   await run(STORES, "readwrite", (tx) => {
     for (const name of STORES) {
       const store = tx.objectStore(name);
       store.clear();
-      for (const row of data[name]) store.put(row);
+      for (const row of clean[name]) store.put(row);
     }
   });
-  return { entries: data.entries.length, foods: data.foods.length, meals: data.meals.length };
+  return { entries: clean.entries.length, foods: clean.foods.length, meals: clean.meals.length };
 }
 
 // Asks the browser not to evict the log when the phone runs low on space.

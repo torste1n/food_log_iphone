@@ -11,7 +11,10 @@
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
 <meta name="format-detection" content="telephone=no">
-<link rel="manifest" href="manifest.webmanifest">
+<!-- shared by link or invitation only: keep it out of search engines -->
+<meta name="robots" content="noindex, nofollow">
+<!-- use-credentials lets the manifest load when the site sits behind a login -->
+<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">

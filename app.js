@@ -1,9 +1,7 @@
-// Food Log: screens and navigation. Storage lives in db.js, charts in charts.js and the
-// Excel export in export.js.
+// Food Log: screens and navigation. Storage lives in db.js and the Excel export in export.js.
 
 import * as db from "./db.js";
 import { MEALS, MAIN_MEALS, UNITS } from "./db.js";
-import { columnChart, rankedBars } from "./charts.js";
 import { buildLogExport, exportPeriod } from "./export.js";
 
 // The app does not run inside a frame on someone else's page, where what is drawn over it
@@ -19,11 +17,14 @@ const MEAL_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", s
 const MEAL_COLOR = { breakfast: "--series-1", lunch: "--series-2", dinner: "--series-3", snack: "--series-4" };
 const REMINDED_MEALS = ["breakfast", "lunch", "dinner"];
 const DEFAULT_REMINDERS = { enabled: true, times: { breakfast: "08:00", lunch: "12:00", dinner: "18:00" } };
-const BOX_LABEL = { food: "Food", exercise: "Exercise", period: "Period", condition: "General condition" };
+const BOX_LABEL = {
+  food: "Food", exercise: "Exercise", period: "Period", condition: "General condition",
+  bloating: "Bloating", contaminated: "Contaminated", ring: "Ring",
+};
 const RANGES = {
-  7: { label: "7 days", days: 7, weekly: false },
-  30: { label: "30 days", days: 30, weekly: false },
-  84: { label: "12 weeks", days: 84, weekly: true },
+  7: { label: "7 days", days: 7 },
+  30: { label: "30 days", days: 30 },
+  84: { label: "12 weeks", days: 84 },
 };
 const LOCALE = "en-GB";
 const EXPORT_DAY_CHOICES = [1, 2, 3, 7, 14, 30];
@@ -99,11 +100,13 @@ function segmented(name, options, value, extraClass = "") {
 // is not used, because it shows AM and PM whenever the phone is set to a 12-hour clock.
 const two = (n) => String(n).padStart(2, "0");
 
-// An empty value shows as "--:--", for a time that does not exist yet.
-function timeField(name, value, disabled = false, what = "") {
+// An empty value shows as "--:--", for a time that does not exist yet. An `optional` time
+// can be left like that, or put back to it.
+function timeField(name, value, disabled = false, what = "", optional = false) {
   const [hour, minute] = String(value).split(":");
-  const options = (count, chosen) => (value ? Array.from({ length: count }, (_, i) =>
-    `<option${two(i) === chosen ? " selected" : ""}>${two(i)}</option>`).join("") : '<option value="">--</option>');
+  const options = (count, chosen) => (value && !optional ? "" : '<option value="">--</option>')
+    + (value || optional ? Array.from({ length: count }, (_, i) =>
+      `<option${two(i) === chosen ? " selected" : ""}>${two(i)}</option>`).join("") : "");
   const attrs = disabled ? "disabled" : "";
   return `<span class="time-field" data-time="${name}">`
     + `<select aria-label="${what}Hour" ${attrs}>${options(24, hour)}</select><span aria-hidden="true">:</span>`
@@ -621,32 +624,40 @@ function scaleControl(field, label, value, ends = null) {
 const noteInput = (field, value, label, extra = "") =>
   `<input type="text" data-day="${field}" value="${esc(value)}" placeholder="Note" autocomplete="off" autocapitalize="sentences" aria-label="${label}" ${extra}>`;
 
+// A box with a tick: what belongs to the tick is shown only while it is ticked.
+// `note` names the day's field that holds the box's Note, for the boxes that have one.
+// `fixed` marks a detail that cannot shrink the way a slider can; on a narrow phone it
+// goes under the tick instead.
+function tickBox(id, label, day, detail, note = "", fixed = false) {
+  const hidden = day[id] ? "" : "hidden";
+  return `
+    <section class="card day-card" data-box="${id}">
+      <div class="day-row">
+        <label class="check"><input type="checkbox" data-day="${id}" ${day[id] ? "checked" : ""}><span>${label}</span></label>
+        <span class="day-detail${fixed ? " day-fixed" : ""}" ${hidden}>${detail}</span>
+      </div>
+      ${note ? noteInput(note, day[note], `${label} note`, `class="day-detail" ${hidden}`) : ""}
+    </section>`;
+}
+
+// A time or a date beside a tick, under its label as a slider is.
+const labelled = (label, control) => `<span class="day-field"><span class="scale-label">${label}</span>${control}</span>`;
+
 // The boxes of the Today screen other than Food, one per day.
 const DAY_BOX = {
-  exercise: (day) => {
-    const hidden = day.exercise ? "" : "hidden";
-    return `
-    <section class="card day-card" data-box="exercise">
-      <div class="day-row">
-        <label class="check"><input type="checkbox" data-day="exercise" ${day.exercise ? "checked" : ""}><span>Exercise</span></label>
-        <span class="exercise-detail" ${hidden}>${scaleControl("intensity", "Intensity", day.intensity)}</span>
-      </div>
-      ${noteInput("exerciseNote", day.exerciseNote, "Exercise note", `class="exercise-detail" ${hidden}`)}
-    </section>`;
-  },
-  period: (day) => `
-    <section class="card day-card" data-box="period">
-      <div class="day-row">
-        <label class="check"><input type="checkbox" data-day="period" ${day.period ? "checked" : ""}><span>Period</span></label>
-        ${scaleControl("pain", "Pain", day.pain)}
-      </div>
-      ${noteInput("painNote", day.painNote, "Pain note")}
-    </section>`,
+  exercise: (day) => tickBox("exercise", "Exercise", day, scaleControl("intensity", "Intensity", day.intensity), "exerciseNote"),
+  period: (day) => tickBox("period", "Period", day, scaleControl("pain", "Pain", day.pain), "painNote"),
   condition: (day) => `
     <section class="card day-card" data-box="condition">
       <div class="day-row">${scaleControl("condition", "General condition", day.condition, ["Bad", "Good"])}</div>
       ${noteInput("conditionNote", day.conditionNote, "General condition note")}
     </section>`,
+  bloating: (day) => tickBox("bloating", "Bloating", day, scaleControl("bloatingLevel", "Severity", day.bloatingLevel), "bloatingNote"),
+  contaminated: (day) => tickBox("contaminated", "Contaminated", day,
+    labelled("Time", timeField("contaminatedTime", day.contaminatedTime, false, "Contaminated: ", true)), "contaminatedNote", true),
+  // ticked on the day a ring is put in, with the date it is to be taken out
+  ring: (day) => tickBox("ring", "Ring", day, labelled("Next removal",
+    `<input type="date" data-day="ringRemoval" value="${esc(day.ringRemoval)}" min="${esc(day.date)}" aria-label="Next removal">`), "", true),
 };
 
 // Every change in a day box is saved straight away; there is no Save button.
@@ -662,11 +673,22 @@ function wireDayCard(card, day) {
     else if (el.type === "range") day[name] = Number(el.value);
     else day[name] = el.value;
     if (el.type === "range") showScale(name);
-    if (name === "exercise") card.querySelectorAll(".exercise-detail").forEach((x) => { x.hidden = !day.exercise; });
+    if (el.type === "checkbox") card.querySelectorAll(".day-detail").forEach((x) => { x.hidden = !el.checked; });
     save();
   };
   card.addEventListener("input", (e) => { if (e.target.dataset.day) take(e.target); });
   card.addEventListener("change", (e) => { if (e.target.dataset.day) take(e.target); });
+  // A time that may be left empty: hour and minute are set or empty together.
+  card.addEventListener("change", (e) => {
+    const field = e.target.closest("[data-time]");
+    if (!field) return;
+    const [hour, minute] = field.querySelectorAll("select");
+    if (e.target.value === "") hour.value = minute.value = "";
+    else if (hour.value === "") hour.value = "00";
+    else if (minute.value === "") minute.value = "00";
+    day[field.dataset.time] = hour.value ? `${hour.value}:${minute.value}` : "";
+    save();
+  });
   card.addEventListener("click", (e) => {
     // a tap on a slider records its value even when the value did not move, so 0 can be set
     if (e.target.type === "range") return take(e.target);
@@ -856,62 +878,56 @@ async function renderSaved() {
 
 // ---------------------------------------------------------------- History
 
-function historyBuckets(entries, range, today) {
-  const empty = () => Object.fromEntries(MEALS.map((m) => [m, 0]));
-  const short = (date) => fmtDay(date, { day: "numeric", month: "short" });
-  const buckets = [];
-  if (range.weekly) {
-    for (let w = range.days / 7 - 1; w >= 0; w--) {
-      const from = db.shiftDate(today, -(w * 7 + 6)), to = db.shiftDate(today, -w * 7);
-      buckets.push({ from, to, label: short(from), tip: `${short(from)} – ${short(to)}`, showLabel: w % 3 === 0, values: empty() });
-    }
-  } else {
-    for (let d = range.days - 1; d >= 0; d--) {
-      const date = db.shiftDate(today, -d);
-      const weekday = fmtDay(date, { weekday: "short" });
-      buckets.push({
-        from: date, to: date, tip: `${weekday} ${short(date)}`, values: empty(),
-        label: range.days <= 7 ? weekday : short(date),
-        showLabel: range.days <= 7 || d % 7 === 0,
-      });
-    }
-  }
-  for (const e of entries) {
-    const bucket = buckets.find((b) => e.date >= b.from && e.date <= b.to);
-    if (bucket) bucket.values[e.meal]++;
-  }
-  return buckets;
-}
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Whole days from one date to another; negative when `to` is the earlier of the two.
+const daysApart = (from, to) => Math.round((toDate(to) - toDate(from)) / 86400000);
+
+const tile = (label, value, wide = false) =>
+  `<div class="tile${wide ? " wide" : ""}"><span class="tile-label">${label}</span><span class="tile-value">${value}</span></div>`;
+
+// A number of days, or a dash where there is nothing to count from.
+const dayCount = (n, after = "") => (n === null ? "–" : `${n}<small> ${n === 1 ? "day" : "days"}${after}</small>`);
+
+// The boxes with a tick, and what History calls the time since each was last ticked.
+const SINCE_LABEL = {
+  exercise: "Days since exercise", period: "Days since period",
+  bloating: "Days since bloating", contaminated: "Days since contamination",
+};
 
 async function renderHistory() {
   const range = RANGES[state.range];
   const today = db.dateStr();
   const from = db.shiftDate(today, -(range.days - 1));
-  const entries = await db.entriesBetween(from, today);
+  const [all, days] = await Promise.all([db.allEntries(), db.daysBetween("0000-01-01", today)]);
+  const entries = all.filter((e) => e.date >= from && e.date <= today);
 
   const byDate = new Map();
   for (const e of entries) {
     if (!byDate.has(e.date)) byDate.set(e.date, []);
     byDate.get(e.date).push(e);
   }
-  const daysLogged = byDate.size;
-  const mealsPerDay = daysLogged
-    ? [...byDate.values()].reduce((sum, list) => sum + new Set(list.map((e) => e.meal)).size, 0) / daysLogged : 0;
 
-  const hours = Array.from({ length: 24 }, () => 0);
-  const counts = new Map();
-  for (const e of entries) {
-    hours[Number(e.time.slice(0, 2))]++;
-    const key = e.foodName.toLowerCase();
-    counts.set(key, { name: counts.get(key)?.name ?? e.foodName, count: (counts.get(key)?.count ?? 0) + 1 });
-  }
-  const topFoods = [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 6);
-  const sourceCounts = new Map();
-  for (const e of entries) {
-    const key = (e.source ?? "").toLowerCase();
-    sourceCounts.set(key, { name: sourceCounts.get(key)?.name ?? (e.source || "Not given"), count: (sourceCounts.get(key)?.count ?? 0) + 1 });
-  }
-  const topSources = [...sourceCounts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 6);
+  // Days in a row with a food logged, up to today. A today with nothing logged yet does
+  // not break the row; it only does not count.
+  const logged = new Set(all.map((e) => e.date));
+  let streak = 0;
+  for (let date = logged.has(today) ? today : db.shiftDate(today, -1); logged.has(date); date = db.shiftDate(date, -1)) streak++;
+
+  // One box per ticked thing, for the boxes that are switched on, in the Today screen's order.
+  const latest = (tick) => [...days].reverse().find((d) => d[tick] === true && DATE_SHAPE.test(d.date)) ?? null;
+  const boxTiles = state.boxes.filter((box) => box.enabled).map((box) => {
+    if (SINCE_LABEL[box.id]) {
+      const last = latest(box.id);
+      return tile(SINCE_LABEL[box.id], dayCount(last ? daysApart(last.date, today) : null), true);
+    }
+    if (box.id !== "ring") return "";
+    const ring = latest("ring");       // the day the ring now worn was put in
+    const left = ring && DATE_SHAPE.test(ring.ringRemoval) ? daysApart(today, ring.ringRemoval) : null;
+    return tile("Days since ring", dayCount(ring ? daysApart(ring.date, today) : null))
+      + tile("Days remaining", left !== null && left < 0 ? dayCount(-left, " overdue") : dayCount(left));
+  }).join("");
+
   const dayRows = [...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, list]) => {
     const meals = new Set(list.map((e) => e.meal));
     return `
@@ -922,7 +938,6 @@ async function renderHistory() {
       </button></li>`;
   }).join("");
 
-  const pad2 = (n) => String(n).padStart(2, "0");
   view.innerHTML = `
     <header class="screen-head">
       <div class="head-row">
@@ -931,37 +946,17 @@ async function renderHistory() {
       </div>
     </header>
     <div class="toolbar">${segmented("range", Object.entries(RANGES).map(([k, r]) => [k, r.label]), String(state.range), "seg-wide")}</div>
-    ${entries.length ? `
     <div class="tiles">
-      <div class="tile"><span class="tile-label">Days logged</span><span class="tile-value">${daysLogged}<small> of ${range.days}</small></span></div>
-      <div class="tile"><span class="tile-label">Entries</span><span class="tile-value">${entries.length}</span></div>
-      <div class="tile"><span class="tile-label">Meals per day</span><span class="tile-value">${mealsPerDay.toFixed(1)}</span></div>
+      ${tile("Days logged", `${byDate.size}<small> of ${range.days}</small>`)}
+      ${tile("Logging streak", dayCount(streak))}
+      ${boxTiles}
     </div>
-    <section class="card chart-card"><h2>Entries per ${range.weekly ? "week" : "day"}, by meal</h2><div id="chart-days"></div></section>
-    <section class="card chart-card"><h2>Time of day</h2><p class="sub">Entries by hour logged</p><div id="chart-hours"></div></section>
-    <section class="card chart-card"><h2>Where the food came from</h2><p class="sub">Foods logged per source</p><div id="chart-sources"></div></section>
-    <section class="card chart-card"><h2>Most logged foods</h2><p class="sub">Times logged</p><div id="chart-foods"></div></section>
-    ${listCard("Days", dayRows)}`
-    : '<p class="empty-screen">Nothing logged in this period yet.</p>'}`;
+    ${entries.length ? listCard("Days", dayRows) : '<p class="empty-screen">Nothing logged in this period yet.</p>'}`;
 
   view.querySelector(".seg").addEventListener("change", (e) => {
     state.range = Number(e.target.value);
     renderHistory();
   });
-  if (!entries.length) return;
-
-  columnChart(view.querySelector("#chart-days"), {
-    buckets: historyBuckets(entries, range, today),
-    series: MEALS.map((m) => ({ key: m, label: MEAL_LABEL[m], color: MEAL_COLOR[m] })),
-  });
-  columnChart(view.querySelector("#chart-hours"), {
-    buckets: hours.map((n, h) => ({
-      label: pad2(h), showLabel: h % 6 === 0, tip: `${pad2(h)}:00 – ${pad2(h + 1)}:00`, values: { all: n },
-    })),
-    series: [{ key: "all", label: "Entries", color: "--series-1" }],
-  });
-  rankedBars(view.querySelector("#chart-sources"), topSources);
-  rankedBars(view.querySelector("#chart-foods"), topFoods);
 }
 
 // ---------------------------------------------------------------- Settings
@@ -996,7 +991,7 @@ async function renderSettings() {
           </span>
           <input type="checkbox" data-box-toggle="${box.id}" aria-label="Show ${BOX_LABEL[box.id]}" ${box.enabled ? "checked" : ""}>
         </div>`).join("")}
-      <p class="hint">Choose which boxes the Today screen shows, and in which order. A box that is off is also left out of the Excel file.</p>
+      <p class="hint">Choose which boxes the Today screen shows, and in which order. A box that is off is also left out of History and of the Excel file.</p>
     </section>
 
     <section class="card">
@@ -1235,14 +1230,6 @@ window.addEventListener("hashchange", () => {
 document.addEventListener("visibilitychange", () => {
   const typing = document.activeElement?.matches?.("input[type=text], input[type=search], textarea");
   if (!document.hidden && !sheetOpen() && !typing) render();
-});
-
-let resizeTimer;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (state.lastTab === "history" && !sheetOpen()) render();
-  }, 200);
 });
 
 async function start() {

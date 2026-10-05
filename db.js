@@ -5,7 +5,8 @@
 //   foods     saved foods: id, name, brand, barcode, portionAmount, portionUnit, favourite, lastUsed, useCount
 //   meals     saved meals: id, name, items [{ foodId, foodName, amount, unit }]
 //   days      one row per day: date, period, pain, painNote, exercise, intensity, exerciseNote,
-//             condition, conditionNote
+//             condition, conditionNote, bloating, bloatingLevel, bloatingNote, contaminated,
+//             contaminatedTime, contaminatedNote, ring, ringRemoval
 //   settings  key/value pairs; "sources" is the list of places offered under "Where from"
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"];
@@ -16,11 +17,12 @@ export const UNITS = ["g", "pcs"];
 
 // The boxes of the Today screen, in their default order. Each can be switched off and moved
 // under Settings.
-export const BOX_IDS = ["food", "exercise", "period", "condition"];
+export const BOX_IDS = ["food", "exercise", "period", "condition", "bloating", "contaminated", "ring"];
 
 const DB_VERSION = 2;       // 2 added the days store
-// 2 added days to the backup file; 3 added general condition and the boxes; 4 added the places
-const BACKUP_FORMAT = 4;
+// 2 added days to the backup file; 3 added general condition and the boxes; 4 added the places;
+// 5 added bloating, contamination and the ring
+const BACKUP_FORMAT = 5;
 let dbName = "foodlog";
 let dbPromise = null;
 
@@ -199,7 +201,10 @@ function buildMeal(meal) {
 // A 0 to 10 scale that has not been set is null, which is different from a 0.
 const scale = (value) => (Number.isInteger(value) && value >= 0 && value <= 10 ? value : null);
 
-// How a day went: exercise, period with pain, and general condition.
+// A time or a date that may be left empty; anything of another shape counts as empty.
+const optional = (value, shape) => (typeof value === "string" && shape.test(value) ? value : "");
+
+// How a day went: one group of fields per box of the Today screen.
 function buildDay(day) {
   if (typeof day.date !== "string" || !DATE_RE.test(day.date)) throw new Error("A day needs a date like 2026-10-04");
   return {
@@ -212,6 +217,14 @@ function buildDay(day) {
     exerciseNote: text(day.exerciseNote, 2000),
     condition: scale(day.condition),              // 0 is bad, 10 is good
     conditionNote: text(day.conditionNote, 2000),
+    bloating: Boolean(day.bloating),
+    bloatingLevel: scale(day.bloatingLevel),
+    bloatingNote: text(day.bloatingNote, 2000),
+    contaminated: Boolean(day.contaminated),
+    contaminatedTime: optional(day.contaminatedTime, TIME_RE),
+    contaminatedNote: text(day.contaminatedNote, 2000),
+    ring: Boolean(day.ring),                      // a ring was put in on this day
+    ringRemoval: optional(day.ringRemoval, DATE_RE),   // the date it is to be taken out
   };
 }
 
@@ -428,7 +441,9 @@ export async function allMeals() {
 
 const isBlankDay = (d) =>
   !d.period && d.pain === null && !d.painNote && !d.exercise && d.intensity === null && !d.exerciseNote
-  && d.condition === null && !d.conditionNote;
+  && d.condition === null && !d.conditionNote
+  && !d.bloating && d.bloatingLevel === null && !d.bloatingNote
+  && !d.contaminated && !d.contaminatedTime && !d.contaminatedNote && !d.ring && !d.ringRemoval;
 
 export async function getDay(date) {
   return (await read("days", (s) => done(s.get(date)))) ?? buildDay({ date });

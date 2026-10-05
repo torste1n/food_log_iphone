@@ -218,7 +218,7 @@ async function main() {
 
   const placeBackup = JSON.parse(JSON.stringify(await db.exportData()));
   eq([placeBackup.format, placeBackup.settings.find((s) => s.key === "sources").value.map((p) => p.name)],
-    [4, ["HOME", "Office", "Luigi's"]], "a backup holds the places");
+    [5, ["HOME", "Office", "Luigi's"]], "a backup holds the places");
   await wipe();
   db.useDatabase(TEST_DB);
   eq(await db.recentSources(), ["Home"], "a new log starts with Home as its only place");
@@ -272,9 +272,11 @@ async function main() {
   // ---- how the day went: exercise, period with pain, general condition
   await wipe();
   db.useDatabase(TEST_DB);
-  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: false, pain: null, painNote: "", exercise: false, intensity: null, exerciseNote: "", condition: null, conditionNote: "" }, "a day with nothing recorded reads as blank");
+  // the boxes added later: bloating, contamination and the ring
+  const REST_BLANK = { bloating: false, bloatingLevel: null, bloatingNote: "", contaminated: false, contaminatedTime: "", contaminatedNote: "", ring: false, ringRemoval: "" };
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: false, pain: null, painNote: "", exercise: false, intensity: null, exerciseNote: "", condition: null, conditionNote: "", ...REST_BLANK }, "a day with nothing recorded reads as blank");
   await db.saveDay({ date: "2026-10-04", period: true, pain: 6, painNote: " cramps after lunch ", exercise: true, intensity: 3, exerciseNote: "walk", condition: 8, conditionNote: " good day " });
-  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: true, pain: 6, painNote: "cramps after lunch", exercise: true, intensity: 3, exerciseNote: "walk", condition: 8, conditionNote: "good day" }, "saveDay stores period, pain, exercise, general condition and the notes");
+  eq(await db.getDay("2026-10-04"), { date: "2026-10-04", period: true, pain: 6, painNote: "cramps after lunch", exercise: true, intensity: 3, exerciseNote: "walk", condition: 8, conditionNote: "good day", ...REST_BLANK }, "saveDay stores period, pain, exercise, general condition and the notes");
   await db.saveDay({ date: "2026-10-06", condition: 0 });
   eq((await db.getDay("2026-10-06")).condition, 0, "a general condition of 0 is stored, and keeps the day");
   await db.saveDay({ date: "2026-10-06", condition: null });
@@ -291,7 +293,7 @@ async function main() {
   await db.saveEntry({ date: "2026-10-04", time: "12:00", meal: "lunch", foodName: "Soup" });
   await db.setSetting("period", { enabled: false });
   const v2 = JSON.parse(JSON.stringify(await db.exportData()));
-  eq([v2.format, v2.days.length], [4, 2], "a backup holds the days");
+  eq([v2.format, v2.days.length], [5, 2], "a backup holds the days");
   await wipe();
   db.useDatabase(TEST_DB);
   await db.importData(v2);
@@ -311,21 +313,51 @@ async function main() {
   await wipe();
   db.useDatabase(TEST_DB);
   const ids = (boxes) => boxes.map((b) => (b.enabled ? b.id : `(${b.id})`));
-  eq(ids(await db.getBoxes()), ["food", "exercise", "period", "condition"], "by default the boxes are Food, Exercise, Period, General condition, all shown");
+  const LATER = ["bloating", "contaminated", "ring"];
+  eq(ids(await db.getBoxes()), ["food", "exercise", "period", "condition", ...LATER], "by default the boxes are Food, Exercise, Period, General condition, Bloating, Contaminated, Ring, all shown");
   await db.setSetting("period", { enabled: false });
-  eq(ids(await db.getBoxes()), ["food", "exercise", "(period)", "condition"], "an older Period switch that was off carries over");
+  eq(ids(await db.getBoxes()), ["food", "exercise", "(period)", "condition", ...LATER], "an older Period switch that was off carries over");
   await db.setSetting("boxes", [{ id: "condition", enabled: true }, { id: "food", enabled: false }, { id: "exercise", enabled: true }, { id: "period", enabled: true }]);
-  eq(ids(await db.getBoxes()), ["condition", "(food)", "exercise", "period"], "a chosen order and chosen switches are kept, and replace the older switch");
+  eq(ids(await db.getBoxes()), ["condition", "(food)", "exercise", "period", ...LATER], "a chosen order and chosen switches are kept, and replace the older switch; boxes it does not name follow, shown");
   eq(ids(db.normaliseBoxes([{ id: "period", enabled: false }, { id: "nonsense", enabled: true }, { id: "period", enabled: true }, "x", null])),
-    ["(period)", "food", "exercise", "condition"], "a damaged list is repaired: unknown and repeated boxes dropped, missing ones added");
+    ["(period)", "food", "exercise", "condition", ...LATER], "a damaged list is repaired: unknown and repeated boxes dropped, missing ones added");
   const boxBackup = JSON.parse(JSON.stringify(await db.exportData()));
   await wipe();
   db.useDatabase(TEST_DB);
   await db.importData({ ...boxBackup, settings: [...boxBackup.settings.filter((s) => s.key !== "boxes"), { key: "boxes", value: [{ id: "food", enabled: false }, { id: '"><img src=x>', enabled: true }] }] });
-  eq(ids(await db.getBoxes()), ["(food)", "exercise", "period", "condition"], "boxes restored from a backup are checked and repaired");
+  eq(ids(await db.getBoxes()), ["(food)", "exercise", "period", "condition", ...LATER], "boxes restored from a backup are checked and repaired");
   await db.saveDay({ date: db.dateStr(), condition: 7, conditionNote: "fine", pain: 2, exercise: true, intensity: 5 });
   await db.setSetting("boxes", [{ id: "condition", enabled: true }, { id: "food", enabled: true }, { id: "period", enabled: false }, { id: "exercise", enabled: true }]);
   eq((await buildLogExport(1)).dayCount, 1, "the export still builds with boxes reordered and switched off");
+
+  // ---- bloating, contamination and the ring
+  await wipe();
+  db.useDatabase(TEST_DB);
+  const full = await db.saveDay({ date: "2026-10-04", bloating: true, bloatingLevel: 7, bloatingNote: " after dinner ", contaminated: true, contaminatedTime: "14:30", contaminatedNote: " shared fryer ", ring: true, ringRemoval: "2026-10-25" });
+  eq([full.bloating, full.bloatingLevel, full.bloatingNote, full.contaminated, full.contaminatedTime, full.contaminatedNote, full.ring, full.ringRemoval],
+    [true, 7, "after dinner", true, "14:30", "shared fryer", true, "2026-10-25"], "saveDay stores bloating, contamination with its time, and the ring with its next removal");
+  const loose = await db.saveDay({ date: "2026-10-05", contaminated: true, contaminatedTime: "25:00", ring: true, ringRemoval: "soon", bloating: 1, bloatingLevel: 11 });
+  eq([loose.contaminatedTime, loose.ringRemoval, loose.bloating, loose.bloatingLevel], ["", "", true, null], "a time or a date of the wrong shape is left empty, and a level off the scale is dropped");
+  await db.saveDay({ date: "2026-10-06", contaminated: true });
+  eq((await db.daysBetween("2026-10-06", "2026-10-06")).length, 1, "a tick alone keeps the day");
+  await db.saveDay({ date: "2026-10-06", contaminated: false });
+  eq((await db.daysBetween("2026-10-06", "2026-10-06")).length, 0, "…and a day with the tick taken away again is not kept");
+  const b5 = JSON.parse(JSON.stringify(await db.exportData()));
+  await wipe();
+  db.useDatabase(TEST_DB);
+  await db.importData(b5);
+  const back = await db.getDay("2026-10-04");
+  eq([b5.format, back.bloatingLevel, back.contaminatedTime, back.ringRemoval], [5, 7, "14:30", "2026-10-25"], "bloating, contamination and the ring survive export and import");
+  const cleanedNew = await db.importData({ ...b5, days: [{ date: "2026-10-04", contaminated: true, contaminatedTime: MARKUP, ring: "yes", ringRemoval: MARKUP, bloatingLevel: "<b>", bloatingNote: 7 }] }).then(() => db.getDay("2026-10-04"));
+  eq([cleanedNew.contaminatedTime, cleanedNew.ringRemoval, cleanedNew.ring, cleanedNew.bloatingLevel, cleanedNew.bloatingNote], ["", "", true, null, "7"], "restored from a backup, they are cleaned like every other field");
+  await db.importData({ ...b5, format: 4,
+    days: [{ date: "2026-10-04", period: true, pain: 6, painNote: "", exercise: false, intensity: null, exerciseNote: "", condition: null, conditionNote: "" }],
+    settings: [{ key: "boxes", value: [{ id: "condition", enabled: true }, { id: "food", enabled: true }, { id: "exercise", enabled: false }, { id: "period", enabled: true }] }] });
+  const before5 = await db.getDay("2026-10-04");
+  eq([before5.pain, before5.bloating, before5.contaminatedTime, before5.ring], [6, false, "", false], "a backup from before these boxes existed restores, with them empty");
+  eq(ids(await db.getBoxes()), ["condition", "food", "(exercise)", "period", ...LATER], "…and the boxes it had chosen keep their order, with the new ones after them, shown");
+  await db.saveDay({ date: db.dateStr(), bloating: true, bloatingLevel: 4, contaminated: true, contaminatedTime: "09:15", ring: true, ringRemoval: db.shiftDate(db.dateStr(), 21) });
+  eq((await buildLogExport(1)).dayCount, 1, "the export builds with the new boxes recorded");
 
   // ---- a log made by the previous version of the app is kept when the database is upgraded
   const OLD_DB = TEST_DB + "-upgrade";

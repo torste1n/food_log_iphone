@@ -14,7 +14,7 @@
   --border: rgba(255, 255, 255, 0.12);
   --danger: #e66767;
   --on-ink: #000000;
-  /* meal colours: breakfast, lunch, dinner, snack — the same in the day view and the charts */
+  /* meal colours: breakfast, lunch, dinner, snack — the same in the day view and in History */
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -193,10 +193,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 /* ------------------------------------------------------------ how the day went */
 
 .day-card { padding: 4px 0 8px; }
-.day-row { display: flex; align-items: center; gap: 16px; padding: 0 16px; min-height: 64px; }
+.day-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; padding: 0 16px; min-height: 64px; }
 .day-card > input[type="text"] { display: block; width: calc(100% - 32px); margin: 2px 16px 10px; }
-.day-card > input[hidden], .exercise-detail[hidden] { display: none; }
-.exercise-detail { flex: 1; min-width: 0; display: flex; }
+.day-card > input[hidden], .day-detail[hidden] { display: none; }
+.day-detail { flex: 1; min-width: 0; display: flex; }
+/* a time or a date does not shrink as a slider does: on a narrow phone it goes under the tick */
+.day-row > .day-fixed { min-width: max-content; }
+/* a time or a date beside a tick, under its label as a slider is */
+.day-field { flex: 1; min-width: 0; display: grid; gap: 4px; justify-items: start; padding: 8px 0; }
+.day-field input[type="date"] { width: auto; min-width: 150px; max-width: 100%; min-height: 40px; padding: 6px 12px; }
 
 .check { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; flex: none; font-weight: 500; }
 .check input {
@@ -301,7 +306,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .time-field select { width: 68px; padding: 9px 4px; text-align: center; text-align-last: center; }
 .time-field select:disabled { opacity: 0.4; }
 /* the time of a meal, in its header on the Today screen */
-.card-head .time-field select { width: 54px; min-height: 40px; padding: 6px 2px; }
+.card-head .time-field select, .day-card .time-field select { width: 54px; min-height: 40px; padding: 6px 2px; }
 .sheet-form .time-field { display: flex; }
 .sheet-form .time-field select { flex: 1; width: auto; }
 
@@ -336,49 +341,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 
 /* ------------------------------------------------------------ history */
 
-.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 12px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tile-label { font-size: 13px; color: var(--ink-2); }
 .tile-value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
 .tile-value small { font-size: 13px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
 
-.chart-card { padding: 14px 14px 12px; }
-.chart-card h2 { font-size: 17px; font-weight: 600; }
-.chart-card > .sub { margin-bottom: 4px; }
-.chart-card > div { margin-top: 10px; }
-
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend i, .tip-row i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-
-.plot { position: relative; touch-action: pan-y; }
-.plot svg { display: block; width: 100%; height: auto; stroke: none; }
-.plot .grid { stroke: var(--hairline); stroke-width: 1; }
-.plot .axis { stroke: var(--axis); stroke-width: 1; }
-.plot .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.plot .band-highlight { fill: var(--ink); opacity: 0.06; }
-
-/* sits above the plot, so it covers the legend rather than the columns it describes */
-.tooltip {
-  position: absolute; bottom: calc(100% - 14px); transform: translateX(-50%); z-index: 2; pointer-events: none;
-  min-width: 112px; padding: 8px 10px; border-radius: 10px;
-  background: var(--fill); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  font-size: 13px; white-space: nowrap;
-}
-.tip-title { color: var(--ink-2); }
-.tip-total { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
-.tip-row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
-.tip-row b { margin-left: auto; padding-left: 12px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-
-.chart-table { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
-.chart-table summary { padding: 6px 0; cursor: pointer; }
-.chart-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.chart-table th, .chart-table td { padding: 5px 4px; text-align: right; border-top: 1px solid var(--hairline); font-weight: 400; }
-.chart-table th:first-child { text-align: left; }
-.chart-table thead th { color: var(--muted); border-top: 0; }
-
-.hbars { display: grid; gap: 10px; }
-.hbar-label { font-size: 14px; margin-bottom: 4px; overflow-wrap: anywhere; }
-.hbar-track { display: flex; align-items: center; gap: 8px; }
-.hbar { height: 12px; min-width: 4px; border-radius: 0 4px 4px 0; }
-.hbar-value { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* one box across the whole line: its label on the left, its number on the right */
+.tile.wide { grid-column: 1 / -1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tile.wide .tile-label { font-size: 15px; }

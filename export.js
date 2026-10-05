@@ -40,11 +40,23 @@ export async function buildLogExport(days) {
     },
     period: {
       columns: [{ header: "Period", width: 8 }, { header: "Pain", type: "number", width: 7 }, { header: "Pain note", width: 30 }],
-      cells: (d) => [d.period ? "Yes" : "", d.pain, d.painNote],
+      cells: (d) => [d.period ? "Yes" : "", d.period ? d.pain : null, d.period ? d.painNote : ""],
     },
     condition: {
       columns: [{ header: "General condition", type: "number", width: 18 }, { header: "General condition note", width: 30 }],
       cells: (d) => [d.condition, d.conditionNote],
+    },
+    bloating: {
+      columns: [{ header: "Bloating", width: 9 }, { header: "Bloating severity", type: "number", width: 17 }, { header: "Bloating note", width: 30 }],
+      cells: (d) => [d.bloating ? "Yes" : "", d.bloating ? d.bloatingLevel : null, d.bloating ? d.bloatingNote : ""],
+    },
+    contaminated: {
+      columns: [{ header: "Contaminated", width: 13 }, { header: "Contaminated time", type: "time", width: 18 }, { header: "Contaminated note", width: 30 }],
+      cells: (d) => [d.contaminated ? "Yes" : "", d.contaminated ? d.contaminatedTime : "", d.contaminated ? d.contaminatedNote : ""],
+    },
+    ring: {
+      columns: [{ header: "Ring", width: 7 }, { header: "Next removal", type: "date", width: 13 }],
+      cells: (d) => [d.ring ? "Yes" : "", d.ring ? d.ringRemoval : ""],
     },
   };
   const groups = boxes.filter((b) => b.enabled && GROUPS[b.id]).map((b) => GROUPS[b.id]);

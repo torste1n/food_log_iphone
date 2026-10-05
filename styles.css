@@ -100,6 +100,10 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .row-with-action { display: flex; align-items: center; }
 .row-with-action .icon-btn { margin-left: 6px; }
 .row-with-action .row { padding-left: 6px; }
+/* a saved place: its name, then the button that removes it */
+.place-row { min-height: 56px; padding: 6px 0 6px 16px; }
+.place-row .row-title { flex: 1; min-width: 0; }
+.place-row .icon-btn { margin-right: 6px; }
 
 .empty { color: var(--muted); font-size: 15px; padding: 0 16px 14px; }
 .empty-screen { color: var(--ink-2); text-align: center; padding: 48px 28px; }
@@ -280,7 +284,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 
 .field { display: block; }
 .field > span:first-child { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 6px 4px; }
+.field[hidden] { display: none; }
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-pair.single { grid-template-columns: 1fr; }
 .amount-row { display: flex; gap: 10px; }
 .amount-row input { flex: 1; min-width: 0; }
 .amount-row .seg { flex: 1.3; }
@@ -294,6 +300,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .time-field { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; flex: none; }
 .time-field select { width: 68px; padding: 9px 4px; text-align: center; text-align-last: center; }
 .time-field select:disabled { opacity: 0.4; }
+/* the time of a meal, in its header on the Today screen */
+.card-head .time-field select { width: 54px; min-height: 40px; padding: 6px 2px; }
 .sheet-form .time-field { display: flex; }
 .sheet-form .time-field select { flex: 1; width: auto; }
 

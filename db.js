@@ -6,9 +6,12 @@
 //   meals     saved meals: id, name, items [{ foodId, foodName, amount, unit }]
 //   days      one row per day: date, period, pain, painNote, exercise, intensity, exerciseNote,
 //             condition, conditionNote
-//   settings  key/value pairs
+//   settings  key/value pairs; "sources" is the list of places offered under "Where from"
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"];
+// Breakfast, lunch and dinner have one time each per day, shared by every food in the meal
+// and set in the meal's header on the Today screen. A snack has a time of its own.
+export const MAIN_MEALS = ["breakfast", "lunch", "dinner"];
 export const UNITS = ["g", "pcs"];
 
 // The boxes of the Today screen, in their default order. Each can be switched off and moved
@@ -16,7 +19,8 @@ export const UNITS = ["g", "pcs"];
 export const BOX_IDS = ["food", "exercise", "period", "condition"];
 
 const DB_VERSION = 2;       // 2 added the days store
-const BACKUP_FORMAT = 3;    // 2 added days to the backup file; 3 added general condition and the boxes
+// 2 added days to the backup file; 3 added general condition and the boxes; 4 added the places
+const BACKUP_FORMAT = 4;
 let dbName = "foodlog";
 let dbPromise = null;
 
@@ -211,6 +215,24 @@ function buildDay(day) {
   };
 }
 
+// The places offered under "Where from": each name once, whatever its capitals, most
+// recently used first.
+const MAX_SOURCES = 200;
+
+function buildSources(list) {
+  if (!Array.isArray(list)) throw new Error("The saved places are invalid");
+  const recent = list
+    .map((item) => ({ name: text(item?.name, 200), lastUsed: wholeNumber(item?.lastUsed) }))
+    .filter((place) => place.name)
+    .sort((a, b) => b.lastUsed - a.lastUsed);
+  const places = new Map();
+  for (const place of recent) {
+    const key = place.name.toLowerCase();
+    if (!places.has(key)) places.set(key, place);
+  }
+  return [...places.values()].slice(0, MAX_SOURCES);
+}
+
 // Only the settings the app knows are kept from a backup; anything else is left out.
 function buildSetting(row) {
   const { key, value } = row ?? {};
@@ -230,6 +252,7 @@ function buildSetting(row) {
     return { key, value: { date: value.date, meals: value.meals.filter((m) => MEALS.includes(m)) } };
   }
   if (key === "boxes") return { key, value: normaliseBoxes(value) };
+  if (key === "sources") return { key, value: buildSources(value) };
   if (key === "period") return { key, value: { enabled: Boolean(value?.enabled) } };   // older backups
   if (key === "lastExport" && Number.isFinite(value)) return { key, value };
   return null;
@@ -261,17 +284,79 @@ export async function entriesBetween(from, to) {
 
 export const allEntries = () => read("entries", (s) => done(s.getAll()));
 
-// The places food has come from, most recently used first, for suggestions.
+// The time of a day's breakfast, lunch or dinner: that of its earliest food, or null while
+// the meal is empty.
+export async function mealTime(date, meal) {
+  return (await entriesForDate(date)).find((e) => e.meal === meal)?.time ?? null;
+}
+
+// Gives every food in one meal of one day the same time. Resolves with how many it changed.
+export async function setMealTime(date, meal, time) {
+  if (typeof date !== "string" || !DATE_RE.test(date)) throw new Error("A meal needs a date like 2026-10-04");
+  if (!MEALS.includes(meal)) throw new Error(`Unknown meal: ${text(meal, 40)}`);
+  if (typeof time !== "string" || !TIME_RE.test(time)) throw new Error("A meal needs a time like 12:30");
+  return write("entries", async (s) => {
+    const rows = (await done(s.index("date").getAll(date))).filter((e) => e.meal === meal);
+    for (const row of rows) s.put(buildEntry({ ...row, time }));
+    return rows.length;
+  });
+}
+
+// ---------------------------------------------------------------- places
+
+// The places offered under "Where from". Every place typed there is remembered, and can
+// be removed again under Saved. The list is kept apart from the log: removing a place
+// changes no entry. Until the list is first changed it is read off the log, so a log from
+// before the list existed starts with the places it has used.
+const SOURCE_STORES = ["settings", "entries"];
+
+async function loadSources(tx) {
+  const stored = await done(tx.objectStore("settings").get("sources"));
+  if (stored) return buildSources(Array.isArray(stored.value) ? stored.value : []);
+  const rows = (await done(tx.objectStore("entries").getAll())).filter((e) => e.source);
+  if (!rows.length) return buildSources([{ name: "Home", lastUsed: 0 }]);
+  const logged = (e) => {
+    const [y, m, d] = e.date.split("-").map(Number);
+    const [hour, minute] = e.time.split(":").map(Number);
+    return new Date(y, m - 1, d, hour, minute).getTime();
+  };
+  rows.sort((a, b) => b.createdAt - a.createdAt);     // of two at the same minute, the later one's spelling
+  return buildSources(rows.map((e) => ({ name: e.source, lastUsed: logged(e) })));
+}
+
+const saveSources = (tx, list) =>
+  done(tx.objectStore("settings").put({ key: "sources", value: buildSources(list) }));
+
+// [{ name, lastUsed }], most recently used first.
+export const allSources = () => run(SOURCE_STORES, "readonly", loadSources);
+
+// Names only, for the suggestions.
 export async function recentSources(limit = 6) {
-  const rows = (await allEntries()).filter((e) => e.source);
-  rows.sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time) || b.createdAt - a.createdAt);
-  const seen = new Map();
-  for (const e of rows) {
-    const key = e.source.toLowerCase();
-    if (!seen.has(key)) seen.set(key, e.source);
-    if (seen.size === limit) break;
-  }
-  return [...seen.values()];
+  return (await allSources()).slice(0, limit).map((place) => place.name);
+}
+
+const samePlace = (name) => {
+  const key = text(name, 200).toLowerCase();
+  return (place) => place.name.toLowerCase() === key;
+};
+
+// Called when a place is typed or picked for a food, so it is offered next time.
+export async function rememberSource(name) {
+  if (!text(name, 200)) return;
+  const same = samePlace(name);
+  await run(SOURCE_STORES, "readwrite", async (tx) => {
+    const others = (await loadSources(tx)).filter((place) => !same(place));
+    // later than every other place, also one read off a food logged for later today
+    const lastUsed = Math.max(Date.now(), ...others.map((place) => place.lastUsed + 1));
+    await saveSources(tx, [{ name, lastUsed }, ...others]);
+  });
+}
+
+export async function deleteSource(name) {
+  const same = samePlace(name);
+  await run(SOURCE_STORES, "readwrite", async (tx) => {
+    await saveSources(tx, (await loadSources(tx)).filter((place) => !same(place)));
+  });
 }
 
 // ---------------------------------------------------------------- foods

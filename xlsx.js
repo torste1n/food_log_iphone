@@ -44,9 +44,13 @@ export function excelTime(time) {
 
 function cell(ref, value, type) {
   if (value === null || value === undefined || value === "") return "";
-  if (type === "number") return `<c r="${ref}"><v>${Number(value)}</v></c>`;
-  if (type === "date") return `<c r="${ref}" s="${STYLE.date}"><v>${excelDate(value)}</v></c>`;
-  if (type === "time") return `<c r="${ref}" s="${STYLE.time}"><v>${excelTime(value)}</v></c>`;
+  // A value that is not what its column expects is written as text, so the file stays readable.
+  const number = type === "number" ? Number(value) : type === "date" ? excelDate(String(value))
+    : type === "time" ? excelTime(String(value)) : NaN;
+  if (Number.isFinite(number)) {
+    const style = type === "number" ? "" : ` s="${STYLE[type]}"`;
+    return `<c r="${ref}"${style}><v>${number}</v></c>`;
+  }
   return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(value)}</t></is></c>`;
 }
 

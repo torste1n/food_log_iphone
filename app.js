@@ -2,9 +2,16 @@
 // Excel export in export.js.
 
 import * as db from "./db.js";
-import { MEALS, UNITS } from "./db.js";
+import { MEALS, MAIN_MEALS, UNITS } from "./db.js";
 import { columnChart, rankedBars } from "./charts.js";
 import { buildLogExport, exportPeriod } from "./export.js";
+
+// The app does not run inside a frame on someone else's page, where what is drawn over it
+// could steer taps. (The response header that forbids framing cannot be set on GitHub Pages.)
+if (window.top !== window.self) {
+  document.getElementById("view").textContent = "Food Log only runs when it is opened directly.";
+  throw new Error("Food Log does not run inside a frame");
+}
 
 const APP_VERSION = "1.0";
 const TABS = ["today", "history", "add", "saved", "settings"];
@@ -92,14 +99,15 @@ function segmented(name, options, value, extraClass = "") {
 // is not used, because it shows AM and PM whenever the phone is set to a 12-hour clock.
 const two = (n) => String(n).padStart(2, "0");
 
-function timeField(name, value, disabled = false) {
+// An empty value shows as "--:--", for a time that does not exist yet.
+function timeField(name, value, disabled = false, what = "") {
   const [hour, minute] = String(value).split(":");
-  const options = (count, chosen) => Array.from({ length: count }, (_, i) =>
-    `<option${two(i) === chosen ? " selected" : ""}>${two(i)}</option>`).join("");
+  const options = (count, chosen) => (value ? Array.from({ length: count }, (_, i) =>
+    `<option${two(i) === chosen ? " selected" : ""}>${two(i)}</option>`).join("") : '<option value="">--</option>');
   const attrs = disabled ? "disabled" : "";
   return `<span class="time-field" data-time="${name}">`
-    + `<select aria-label="Hour" ${attrs}>${options(24, hour)}</select><span aria-hidden="true">:</span>`
-    + `<select aria-label="Minute" ${attrs}>${options(60, minute)}</select></span>`;
+    + `<select aria-label="${what}Hour" ${attrs}>${options(24, hour)}</select><span aria-hidden="true">:</span>`
+    + `<select aria-label="${what}Minute" ${attrs}>${options(60, minute)}</select></span>`;
 }
 
 const readTime = (root, name) =>
@@ -204,6 +212,28 @@ function wireSourceChips(form) {
   });
 }
 
+// Date and time side by side. Only a snack has a time of its own, so the time is shown
+// only while Snack is chosen; the other meals' time is set in their header on Today.
+const dateTimeFields = (date, time) => `
+  <div class="field-pair">
+    <label class="field"><span>Date</span><input name="date" type="date" value="${esc(date)}" max="${db.dateStr()}"></label>
+    <div class="field snack-time"><span>Time</span>${timeField("time", time)}</div>
+  </div>`;
+
+function wireSnackTime(form) {
+  const field = form.querySelector(".snack-time");
+  const refresh = () => {
+    field.hidden = form.elements.meal.value !== "snack";
+    field.parentElement.classList.toggle("single", field.hidden);
+  };
+  form.addEventListener("change", refresh);
+  refresh();
+}
+
+// The time a food gets when it joins a meal on a day: the meal's time if it has one,
+// otherwise the food's own, which then becomes the meal's.
+const joinMealTime = async (date, meal, own) => (await db.mealTime(date, meal)) ?? own;
+
 // One form for logging a new entry and for editing an existing one.
 //   entry  existing entry being edited
 //   food   saved food the entry is made from (gives the portion size)
@@ -244,10 +274,7 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
       </div>
       <div class="field"><span>Meal</span>${segmented("meal", mealOptions, init.meal, "seg-4")}</div>
       ${sourceField(init.source, sources)}
-      <div class="field-pair">
-        <label class="field"><span>Date</span><input name="date" type="date" value="${esc(init.date)}" max="${db.dateStr()}"></label>
-        <div class="field"><span>Time</span>${timeField("time", init.time)}</div>
-      </div>
+      ${dateTimeFields(init.date, init.time)}
       <label class="field"><span>Note</span>
         <textarea name="note" rows="2" placeholder="Optional">${esc(init.note)}</textarea>
       </label>
@@ -258,6 +285,7 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
   const form = sheet.querySelector("form");
   const fields = form.elements;
   wireSourceChips(form);
+  wireSnackTime(form);
 
   if (portion) {
     const label = form.querySelector(".portion-label");
@@ -289,9 +317,14 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
     if (Number.isNaN(amount)) return showError(form, "The amount must be a number above zero, or left empty.");
     if (!fields.date.value) return showError(form, "Choose a date.");
 
+    const meal = fields.meal.value, date = fields.date.value;
+    let time;
+    if (meal === "snack") time = readTime(form, "time");
+    else if (entry?.meal === meal && entry.date === date) time = entry.time;     // it stays where it was
+    else time = await joinMealTime(date, meal, entry?.time ?? db.timeStr());
+
     const values = {
-      foodName, amount, unit: fields.unit.value, meal: fields.meal.value, source: fields.source.value,
-      date: fields.date.value, time: readTime(form, "time"), note: fields.note.value,
+      foodName, amount, unit: fields.unit.value, meal, source: fields.source.value, date, time, note: fields.note.value,
     };
     if (entry) {
       await db.saveEntry({ ...entry, ...values });
@@ -299,6 +332,8 @@ async function openEntrySheet({ entry = null, food = null, name = "", meal = nul
       const remembered = await db.rememberFood({ name: foodName, amount, unit: values.unit });
       await db.saveEntry({ ...values, foodId: remembered.id, brand: remembered.brand, barcode: remembered.barcode });
     }
+    // a place that was removed under Saved comes back only when it is given to a food again
+    if (!entry || values.source.trim().toLowerCase() !== (entry.source ?? "").toLowerCase()) await db.rememberSource(values.source);
     closeSheet();
     state.addContext = null;
     toast(entry ? "Entry updated" : `Logged to ${MEAL_LABEL[values.meal].toLowerCase()}`);
@@ -323,26 +358,27 @@ async function openLogMealSheet(meal, { slot = null, date = null } = {}) {
         `<li><span>${esc(it.foodName)}</span><span class="muted">${esc(fmtAmount(it.amount, it.unit))}</span></li>`).join("")}</ul>
       <div class="field"><span>Meal</span>${segmented("meal", mealOptions, slot ?? guessMeal(), "seg-4")}</div>
       ${sourceField("", sources)}
-      <div class="field-pair">
-        <label class="field"><span>Date</span><input name="date" type="date" value="${esc(date ?? db.dateStr())}" max="${db.dateStr()}"></label>
-        <div class="field"><span>Time</span>${timeField("time", db.timeStr())}</div>
-      </div>
+      ${dateTimeFields(date ?? db.dateStr(), db.timeStr())}
       <p class="form-error" hidden></p>
     </form>`);
   const form = sheet.querySelector("form");
   wireSourceChips(form);
+  wireSnackTime(form);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const { meal: slotField, date: dateField, source } = form.elements;
     if (!dateField.value) return showError(form, "Choose a date.");
+    const time = slotField.value === "snack" ? readTime(form, "time")
+      : await joinMealTime(dateField.value, slotField.value, db.timeStr());
     for (const it of meal.items) {
       const food = await db.rememberFood({ name: it.foodName, amount: it.amount, unit: it.unit });
       await db.saveEntry({
         foodName: it.foodName, amount: it.amount, unit: it.unit, foodId: food.id,
         brand: food.brand, barcode: food.barcode, source: source.value,
-        meal: slotField.value, date: dateField.value, time: readTime(form, "time"),
+        meal: slotField.value, date: dateField.value, time,
       });
     }
+    await db.rememberSource(source.value);
     closeSheet();
     state.addContext = null;
     toast(`Logged ${meal.items.length} ${meal.items.length === 1 ? "food" : "foods"}`);
@@ -558,8 +594,10 @@ function dueMeals(entries, dismissed) {
     state.reminders.times[m] && now >= state.reminders.times[m] && !logged.has(m) && !skipped.includes(m));
 }
 
-function entryRow(e) {
-  const sub = [e.time, e.source, e.note].filter(Boolean).map(esc).join(" · ");
+// `mealTime` is the time in the meal's header; a food's own time is shown only where it
+// differs from that, as it does for a snack and for foods logged before meals had one time.
+function entryRow(e, mealTime = null) {
+  const sub = [e.time === mealTime ? "" : e.time, e.source, e.note].filter(Boolean).map(esc).join(" · ");
   return `
     <li><button type="button" class="row" data-action="edit-entry" data-id="${esc(e.id)}">
       <span class="row-main"><span class="row-title">${esc(e.foodName)}</span><span class="row-sub">${sub}</span></span>
@@ -574,8 +612,8 @@ function scaleControl(field, label, value, ends = null) {
   return `
     <span class="scale">
       <span class="scale-label">${label}</span>
-      <input type="range" min="0" max="10" step="1" value="${value ?? 0}" data-day="${field}" aria-label="${label}, from 0 to 10">
-      <button type="button" class="scale-value" data-clear="${field}" aria-label="Clear ${label.toLowerCase()}">${value ?? "–"}</button>
+      <input type="range" min="0" max="10" step="1" value="${esc(value ?? 0)}" data-day="${field}" aria-label="${label}, from 0 to 10">
+      <button type="button" class="scale-value" data-clear="${field}" aria-label="Clear ${label.toLowerCase()}">${esc(value ?? "–")}</button>
       ${ends ? `<span class="scale-ends"><span>${ends[0]}</span><span>${ends[1]}</span></span>` : ""}
     </span>`;
 }
@@ -660,14 +698,17 @@ async function renderDay(date) {
 
   const sections = MEALS.map((m) => {
     const rows = entries.filter((e) => e.meal === m);
+    // the meal's time: empty until the meal has a food, then that of its earliest food
+    const mealTime = MAIN_MEALS.includes(m) ? rows[0]?.time ?? "" : null;
     return `
       <section class="card">
         <div class="card-head">
           <i class="dot" style="background: var(${MEAL_COLOR[m]})"></i>
           <h2>${MEAL_LABEL[m]}</h2>
+          ${mealTime === null ? "" : timeField(`meal-${m}`, mealTime, !rows.length, `${MEAL_LABEL[m]} time: `)}
           <button type="button" class="icon-btn" data-action="add-to" data-meal="${m}" data-date="${esc(date)}" aria-label="Add to ${MEAL_LABEL[m].toLowerCase()}">${ICON.plus}</button>
         </div>
-        ${rows.length ? `<ul class="rows">${rows.map(entryRow).join("")}</ul>` : '<p class="empty">Nothing logged</p>'}
+        ${rows.length ? `<ul class="rows">${rows.map((e) => entryRow(e, mealTime)).join("")}</ul>` : '<p class="empty">Nothing logged</p>'}
         ${rows.length >= 2 ? `<button type="button" class="link card-foot" data-action="save-as-meal" data-meal="${m}" data-date="${esc(date)}">Save these as a meal</button>` : ""}
       </section>`;
   }).join("");
@@ -692,6 +733,15 @@ async function renderDay(date) {
     </header>
     ${foodOn ? nudge : ""}${boxes || '<p class="empty-screen">Every box is switched off. Turn them on under Settings.</p>'}`;
   view.querySelectorAll(".day-card").forEach((card) => wireDayCard(card, day));
+
+  // A time chosen in a meal's header goes to every food in that meal, at once.
+  for (const m of MAIN_MEALS) {
+    view.querySelector(`[data-time="meal-${m}"]`)?.addEventListener("change", async () => {
+      const mixed = new Set(entries.filter((e) => e.meal === m).map((e) => e.time)).size > 1;
+      await db.setMealTime(date, m, readTime(view, `meal-${m}`)).catch(reportError);
+      if (mixed) render();      // foods that showed a time of their own no longer do
+    });
+  }
 }
 
 // ---------------------------------------------------------------- Add
@@ -725,8 +775,8 @@ function addResults(query, foods, meals) {
       return '<p class="empty-screen">Type a food above to log it. Foods you log are remembered here, so next time it is one tap.</p>';
     }
     return (favourites.length ? listCard("Favourites", favourites.map(foodRow).join("")) : "")
-      + (recent.length ? listCard("Recent", recent.map(foodRow).join("")) : "")
-      + (meals.length ? listCard("Meals", meals.map((m) => mealRow(m, "pick-meal")).join("")) : "");
+      + (meals.length ? listCard("Meals", meals.map((m) => mealRow(m, "pick-meal")).join("")) : "")
+      + (recent.length ? listCard("Recent", recent.map(foodRow).join("")) : "");
   }
   const matches = foods.filter((f) => f.name.toLowerCase().includes(q) || f.brand.toLowerCase().includes(q));
   const mealMatches = meals.filter((m) => m.name.toLowerCase().includes(q));
@@ -760,11 +810,20 @@ async function renderAdd() {
 // ---------------------------------------------------------------- Saved
 
 async function renderSaved() {
-  const showFoods = state.savedSegment === "foods";
-  const items = showFoods ? await db.allFoods() : await db.allMeals();
+  const segment = state.savedSegment;
   let body;
-  if (showFoods) {
-    const sorted = [...items].sort((a, b) => Number(b.favourite) - Number(a.favourite));
+  if (segment === "places") {
+    const places = (await db.allSources()).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    body = places.length ? `
+      <p class="hint">The places offered under “Where from”. Removing one only takes it off that list: entries you have already logged keep it.</p>
+      <section class="card"><ul class="rows">${places.map((p) => `
+      <li class="row-with-action place-row">
+        <span class="row-title">${esc(p.name)}</span>
+        <button type="button" class="icon-btn" data-action="delete-source" data-name="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.close}</button>
+      </li>`).join("")}</ul></section>`
+      : '<p class="empty-screen">No places yet. Every place you give under “Where from” is saved here automatically.</p>';
+  } else if (segment === "foods") {
+    const sorted = (await db.allFoods()).sort((a, b) => Number(b.favourite) - Number(a.favourite));
     body = sorted.length ? `<section class="card"><ul class="rows">${sorted.map((f) => `
       <li class="row-with-action">
         <button type="button" class="icon-btn star ${f.favourite ? "on" : ""}" data-action="toggle-favourite" data-id="${esc(f.id)}" aria-pressed="${Boolean(f.favourite)}" aria-label="Favourite ${esc(f.name)}">${ICON.star}</button>
@@ -775,14 +834,18 @@ async function renderSaved() {
       </li>`).join("")}</ul></section>`
       : '<p class="empty-screen">No saved foods yet. Every food you log is saved here automatically.</p>';
   } else {
+    const items = await db.allMeals();
     body = items.length ? `<section class="card"><ul class="rows">${items.map((m) => mealRow(m, "edit-meal")).join("")}</ul></section>`
       : '<p class="empty-screen">No saved meals yet. A meal is a set of foods you often eat together, logged with one tap.</p>';
   }
+  // places are not made here: they come from what is typed under "Where from"
+  const newButton = segment === "places" ? ""
+    : `<button type="button" class="btn" data-action="${segment === "foods" ? "new-food" : "new-meal"}">${ICON.plus} New</button>`;
   view.innerHTML = `
     <header class="screen-head"><h1>Saved</h1></header>
     <div class="toolbar">
-      ${segmented("segment", [["foods", "Foods"], ["meals", "Meals"]], state.savedSegment)}
-      <button type="button" class="btn" data-action="${showFoods ? "new-food" : "new-meal"}">${ICON.plus} New</button>
+      ${segmented("segment", [["foods", "Foods"], ["meals", "Meals"], ["places", "Where"]], segment)}
+      ${newButton}
     </div>
     ${body}`;
   view.querySelector(".seg").addEventListener("change", (e) => {
@@ -1102,6 +1165,18 @@ const ACTIONS = {
     await db.deleteMeal(id);
     closeSheet();
     toast("Meal deleted");
+    render();
+  },
+
+  "delete-source": async ({ name }) => {
+    const ok = await confirmSheet({
+      title: `Remove ${name}?`,
+      body: "It is taken off the places offered under “Where from”. Entries you have already logged keep it.",
+      confirmLabel: "Remove", danger: true,
+    });
+    if (!ok) return;
+    await db.deleteSource(name);
+    toast("Place removed");
     render();
   },
 

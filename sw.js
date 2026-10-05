@@ -2,8 +2,9 @@
 // connection. Raise VERSION whenever any file below changes; the phone then fetches the
 // new files the next time the app is opened online, and uses them from the launch after.
 
-const VERSION = "4";
-const CACHE = `foodlog-v${VERSION}`;
+const VERSION = "5";
+const PREFIX = "foodlog-v";             // other apps at the same address keep their own caches
+const CACHE = `${PREFIX}${VERSION}`;
 const FILES = [
   "./",
   "index.html",
@@ -30,7 +31,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(
-        keys.filter((key) => key.startsWith("foodlog-") && key !== CACHE).map((key) => caches.delete(key))))
+        keys.filter((key) => key.startsWith(PREFIX) && key !== CACHE).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()));
 });
 

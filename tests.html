@@ -201,6 +201,74 @@ async function main() {
   eq((await buildLogExport(6)).count, 5, "a longer export reaches further back");
   eq((await buildLogExport(1)).count, 3, "a 1-day export holds only today's entries");
 
+  // ---- the places offered under "Where from" are a list of their own, apart from the log
+  eq((await db.allSources()).map((p) => p.name), ["cafeteria", "Home", "Luigi's"], "until it is first changed, the list of places is read off the log");
+  await db.rememberSource("  Office ");
+  eq(await db.recentSources(), ["Office", "cafeteria", "Home", "Luigi's"], "rememberSource puts a place first, trimmed");
+  await db.rememberSource("HOME");
+  eq(await db.recentSources(), ["HOME", "Office", "cafeteria", "Luigi's"], "a place used again moves to the front and is not listed twice");
+  await db.rememberSource("   ");
+  eq((await db.allSources()).length, 4, "an empty place is not remembered");
+  const logBefore = JSON.stringify(await db.allEntries());
+  await db.deleteSource("CAFETERIA");
+  eq(await db.recentSources(), ["HOME", "Office", "Luigi's"], "deleteSource removes a place, ignoring case");
+  eq(JSON.stringify(await db.allEntries()), logBefore, "removing a place changes no entry");
+  eq((await db.allEntries()).filter((e) => e.source.toLowerCase() === "cafeteria").length, 2, "…so the log still names the removed place");
+  eq(await db.recentSources(), ["HOME", "Office", "Luigi's"], "…and the place does not come back from the log");
+
+  const placeBackup = JSON.parse(JSON.stringify(await db.exportData()));
+  eq([placeBackup.format, placeBackup.settings.find((s) => s.key === "sources").value.map((p) => p.name)],
+    [4, ["HOME", "Office", "Luigi's"]], "a backup holds the places");
+  await wipe();
+  db.useDatabase(TEST_DB);
+  eq(await db.recentSources(), ["Home"], "a new log starts with Home as its only place");
+  await db.importData(placeBackup);
+  eq(await db.recentSources(), ["HOME", "Office", "Luigi's"], "the places survive export and import, removed ones staying removed");
+  const withPlaces = (value) => ({ ...placeBackup, settings: [...placeBackup.settings.filter((s) => s.key !== "sources"), { key: "sources", value }] });
+  await rejects(() => db.importData(withPlaces("x")), "a backup whose places are not a list is refused");
+  await db.importData(withPlaces([{ name: "A", lastUsed: 5 }, { name: "a", lastUsed: 9 }, "junk", null, { name: "   " }, { name: "B", lastUsed: "<b>", extra: "<script>" }, { name: "x".repeat(500), lastUsed: 1 }]));
+  const restoredPlaces = await db.allSources();
+  eq([restoredPlaces.map((p) => p.name.slice(0, 3)), restoredPlaces[1].name.length, restoredPlaces[2]],
+    [["a", "xxx", "B"], 200, { name: "B", lastUsed: 0 }], "restored places are checked: one per name, junk dropped, text cut to length, only known fields kept");
+  await db.importData({ ...placeBackup, format: 3, settings: placeBackup.settings.filter((s) => s.key !== "sources") });
+  eq(await db.recentSources(), ["cafeteria", "Home", "Luigi's"], "a backup from before the list existed restores with the places its log has used");
+  for (const place of await db.allSources()) await db.deleteSource(place.name);
+  eq(await db.recentSources(), [], "with every place removed none is offered, Home included");
+
+  // ---- removing a saved food, a saved meal or a place leaves the log as it was
+  await wipe();
+  db.useDatabase(TEST_DB);
+  const pasta = await db.rememberFood({ name: "Pasta", brand: "Glutenfri", barcode: "7000000000017", amount: 100, unit: "g" });
+  const pastaMeal = await db.saveMeal({ name: "Pasta dinner", items: [{ foodId: pasta.id, foodName: "Pasta", amount: 100, unit: "g" }] });
+  await db.saveEntry({ date: today, time: "18:00", meal: "dinner", foodName: "Pasta", amount: 100, unit: "g", source: "Luigi's", brand: pasta.brand, barcode: pasta.barcode, foodId: pasta.id });
+  await db.rememberSource("Luigi's");
+  const asLogged = JSON.stringify(await db.allEntries());
+  await db.deleteFood(pasta.id);
+  await db.deleteMeal(pastaMeal.id);
+  await db.deleteSource("Luigi's");
+  eq([(await db.allFoods()).length, (await db.allMeals()).length, (await db.allSources()).length], [0, 0, 0], "the saved food, the saved meal and the place are gone");
+  eq(JSON.stringify(await db.allEntries()), asLogged, "the logged entry is unchanged: food, brand, barcode and place");
+  eq((await buildLogExport(1)).count, 1, "…and it is still exported");
+
+  // ---- breakfast, lunch and dinner have one time each per day
+  await wipe();
+  db.useDatabase(TEST_DB);
+  eq(await db.mealTime("2026-10-01", "breakfast"), null, "an empty meal has no time");
+  await db.saveEntry({ date: "2026-10-01", time: "07:45", meal: "breakfast", foodName: "Oats", createdAt: 1 });
+  await db.saveEntry({ date: "2026-10-01", time: "07:40", meal: "breakfast", foodName: "Egg", createdAt: 2 });
+  await db.saveEntry({ date: "2026-10-01", time: "12:10", meal: "lunch", foodName: "Soup" });
+  await db.saveEntry({ date: "2026-10-01", time: "15:00", meal: "snack", foodName: "Apple", note: "kept" });
+  await db.saveEntry({ date: "2026-10-02", time: "08:30", meal: "breakfast", foodName: "Toast" });
+  eq(await db.mealTime("2026-10-01", "breakfast"), "07:40", "a meal's time is that of its earliest food");
+  eq(await db.setMealTime("2026-10-01", "breakfast", "07:00"), 2, "setMealTime reports how many foods it changed");
+  eq((await db.entriesForDate("2026-10-01")).map((e) => `${e.foodName} ${e.time}`), ["Oats 07:00", "Egg 07:00", "Soup 12:10", "Apple 15:00"],
+    "setMealTime gives every food in that meal the time, and leaves the other meals alone");
+  eq([(await db.entriesForDate("2026-10-02"))[0].time, (await db.entriesForDate("2026-10-01"))[3].note], ["08:30", "kept"], "…and other days, and everything else about a food");
+  eq(await db.setMealTime("2026-10-03", "dinner", "19:00"), 0, "setting the time of an empty meal changes nothing");
+  await rejects(() => db.setMealTime("2026-10-01", "breakfast", "25:00"), "setMealTime rejects an impossible time");
+  await rejects(() => db.setMealTime("2026-10-01", "brunch", "07:00"), "setMealTime rejects an unknown meal");
+  await rejects(() => db.setMealTime("yesterday", "breakfast", "07:00"), "setMealTime rejects a date that is not a date");
+
   // ---- how the day went: exercise, period with pain, general condition
   await wipe();
   db.useDatabase(TEST_DB);
@@ -223,7 +291,7 @@ async function main() {
   await db.saveEntry({ date: "2026-10-04", time: "12:00", meal: "lunch", foodName: "Soup" });
   await db.setSetting("period", { enabled: false });
   const v2 = JSON.parse(JSON.stringify(await db.exportData()));
-  eq([v2.format, v2.days.length], [3, 2], "a backup holds the days");
+  eq([v2.format, v2.days.length], [4, 2], "a backup holds the days");
   await wipe();
   db.useDatabase(TEST_DB);
   await db.importData(v2);
